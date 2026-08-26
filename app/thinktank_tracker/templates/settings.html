@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}设置 · 智库研究追踪{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">LOCAL SETTINGS</p><h1>设置</h1></div><div class="button-group"><form method="post" action="/maintenance/backup"><button class="button secondary" type="submit"><i data-lucide="archive"></i>数据库备份</button></form><form method="post" action="/maintenance/clean-cache"><button class="button secondary" type="submit"><i data-lucide="trash-2"></i>清理过期缓存</button></form></div></div>
+<form method="post" action="/settings">
+  <section class="section-band"><div class="section-heading"><div><h2>模型服务</h2><p>密钥状态：{{ '已存入 Windows 凭据管理器' if has_key else '未配置' }}</p></div></div>
+    <div class="settings-grid">
+      <label class="span-2">OpenAI 兼容 Base URL<input type="url" name="api_base_url" value="{{ config.api_base_url }}" placeholder="https://api.example.com/v1"></label>
+      <label>模型名<input name="model_name" value="{{ config.model_name }}"></label>
+      <label>API 风格<select name="api_style"><option value="chat_completions" {% if config.api_style == 'chat_completions' %}selected{% endif %}>Chat Completions</option><option value="responses" {% if config.api_style == 'responses' %}selected{% endif %}>Responses</option></select></label>
+      <label class="span-2">API 密钥<input type="password" name="api_key" autocomplete="new-password" placeholder="留空则保留现有密钥"></label>
+      <label>请求超时（秒）<input type="number" name="request_timeout_seconds" min="10" max="600" value="{{ config.request_timeout_seconds }}"></label>
+      <label>最大模型输入字符<input type="number" name="max_model_input_chars" min="5000" max="200000" step="1000" value="{{ config.max_model_input_chars }}"></label>
+    </div>
+  </section>
+  <section class="section-band"><div class="section-heading"><div><h2>采集约束</h2><p>全局并发上限固定为 3</p></div></div>
+    <div class="settings-grid">
+      <label>全局并发<input type="number" name="crawl_concurrency" min="1" max="3" value="{{ config.crawl_concurrency }}"></label>
+      <label>同域间隔（秒）<input type="number" name="per_domain_delay_seconds" min="2" step="0.5" value="{{ config.per_domain_delay_seconds }}"></label>
+      <label>单栏目安全页数<input type="number" name="max_listing_pages" min="1" max="200" value="{{ config.max_listing_pages }}"></label>
+      <label>原始缓存保留（天）<input type="number" name="raw_cache_days" min="1" value="{{ config.raw_cache_days }}"></label>
+    </div>
+  </section>
+  <div class="sticky-actions"><button class="button primary" type="submit"><i data-lucide="save"></i>保存设置</button></div>
+</form>
+{% endblock %}

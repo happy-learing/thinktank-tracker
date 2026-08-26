@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}工作台 · 智库研究追踪{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div>
+    <p class="eyebrow">RESEARCH OPERATIONS</p>
+    <h1>研究追踪工作台</h1>
+  </div>
+  <a class="button secondary" href="/sources"><i data-lucide="settings-2"></i>管理来源</a>
+</div>
+
+<section class="metrics" aria-label="工作概况">
+  <div class="metric"><span>启用来源</span><strong>{{ source_count }}</strong></div>
+  <div class="metric"><span>待人工处理</span><strong>{{ pending_count }}</strong></div>
+  <div class="metric"><span>累计批准</span><strong>{{ approved_count }}</strong></div>
+  <div class="metric"><span>最近任务</span><strong>{{ recent_runs|length }}</strong></div>
+</section>
+
+<section class="section-band">
+  <div class="section-heading">
+    <div><h2>新建检索任务</h2><p>日期按闭区间计算</p></div>
+  </div>
+  <form method="post" action="/runs" class="run-form">
+    <label>起始日期<input type="date" name="start_date" value="{{ default_start }}" required></label>
+    <span class="date-arrow"><i data-lucide="arrow-right"></i></span>
+    <label>结束日期<input type="date" name="end_date" value="{{ default_end }}" required></label>
+    <button class="button primary" type="submit" {% if source_count == 0 %}disabled{% endif %}><i data-lucide="play"></i>开始检索</button>
+  </form>
+</section>
+
+<section class="section-band" id="runs">
+  <div class="section-heading">
+    <div><h2>最近任务</h2><p>{{ recent_runs|length }} 条记录</p></div>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>任务</th><th>日期范围</th><th>来源</th><th>状态</th><th>创建时间</th><th class="actions-col">操作</th></tr></thead>
+      <tbody>
+        {% for run in recent_runs %}
+        <tr>
+          <td class="mono">#{{ run.id }}</td>
+          <td>{{ run.start_date }} 至 {{ run.end_date }}</td>
+          <td>{{ run.source_runs|length }}</td>
+          <td><span class="status status-{{ run.status }}">{{ status_label(run.status) }}</span></td>
+          <td>{{ run.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+          <td><a class="icon-button" href="/runs/{{ run.id }}" title="查看任务"><i data-lucide="arrow-up-right"></i></a></td>
+        </tr>
+        {% else %}
+        <tr><td colspan="6" class="empty-state">暂无检索任务</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

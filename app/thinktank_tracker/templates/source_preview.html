@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}确认来源 · 智库研究追踪{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">IMPORT REVIEW</p><h1>确认智库清单</h1></div></div>
+<section class="section-band">
+  <div class="section-heading"><div><h2>解析结果</h2><p>{{ rows|length }} 个来源</p></div></div>
+  <div class="table-wrap">
+    <table><thead><tr><th>#</th><th>分类</th><th>智库名称</th><th>官网</th><th>研究栏目</th><th>适配器</th></tr></thead>
+      <tbody>{% for row in rows %}<tr><td>{{ loop.index }}</td><td>{{ row.group_name or '未分类' }}</td><td><strong>{{ row.name }}</strong></td><td class="url-cell">{{ row.homepage_url }}</td><td class="url-cell">{{ row.publication_url }}</td><td class="mono">{{ row.adapter_key }}</td></tr>{% endfor %}</tbody>
+    </table>
+  </div>
+  <div class="form-actions"><a class="button secondary" href="/sources"><i data-lucide="x"></i>取消</a><form method="post" action="/sources/confirm"><button class="button primary" type="submit"><i data-lucide="check"></i>确认并保存</button></form></div>
+</section>
+{% endblock %}

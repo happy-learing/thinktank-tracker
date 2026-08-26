@@ -1,0 +1,6 @@
+{% extends "base.html" %}
+{% block title %}环境诊断 · 智库研究追踪{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">SYSTEM CHECK</p><h1>环境诊断</h1></div><a class="button secondary" href="/diagnostics?network={{ 'false' if network else 'true' }}"><i data-lucide="wifi"></i>{{ '隐藏连通性检查' if network else '检查六站连通性' }}</a></div>
+<section class="section-band"><div class="diagnostic-list">{% for item in results %}<div class="diagnostic-row"><span class="diag-icon {{ item.status }}"><i data-lucide="{% if item.status == 'pass' %}check{% elif item.status == 'warn' %}triangle-alert{% else %}x{% endif %}"></i></span><strong>{{ item.name }}</strong><span>{{ item.detail }}</span><span class="status status-{{ 'complete' if item.status == 'pass' else 'incomplete' if item.status == 'warn' else 'failed' }}">{{ item.status|upper }}</span></div>{% endfor %}</div></section>
+{% endblock %}

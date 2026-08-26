@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}人工复核 · 智库研究追踪{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div><p class="eyebrow">HUMAN REVIEW #{{ candidate.id }}</p><h1>{{ candidate.title_original or '标题待确认' }}</h1></div>
+  <a class="button secondary" href="/runs/{{ candidate.run_id }}"><i data-lucide="arrow-left"></i>返回任务</a>
+</div>
+<div class="review-layout">
+  <section class="section-band review-source">
+    <div class="section-heading"><div><h2>确定性证据</h2><p>{{ candidate.source.name }}</p></div><a class="icon-button" href="{{ candidate.original_url }}" target="_blank" rel="noreferrer" title="打开原文"><i data-lucide="external-link"></i></a></div>
+    <dl class="evidence-list">
+      <dt>发布日期</dt><dd>{{ candidate.published_date or '待确认' }} <span class="status status-{{ 'complete' if candidate.date_status == 'confirmed' else 'incomplete' }}">{{ candidate.date_status }}</span></dd>
+      <dt>日期证据</dt><dd>{{ candidate.date_evidence or '—' }}</dd>
+      <dt>体裁</dt><dd>{{ candidate.content_type }}</dd>
+      <dt>体裁证据</dt><dd>{{ candidate.content_type_evidence or '—' }}</dd>
+      <dt>正文篇幅</dt><dd>{{ candidate.english_word_count }} 英文词 / {{ candidate.chinese_char_count }} 中文字符</dd>
+      <dt>提取状态</dt><dd>{{ candidate.extraction_status }}</dd>
+      <dt>正文哈希</dt><dd class="mono break-all">{{ candidate.content_hash or '—' }}</dd>
+    </dl>
+    {% if candidate.assessment %}
+    <div class="model-assessment">
+      <h3>模型建议</h3>
+      <p><span class="status status-{{ candidate.status }}">{{ candidate.assessment.decision }}</span> {{ candidate.assessment.reasoning_zh }}</p>
+      {% if candidate.assessment.evidence_json %}<ul>{% for evidence in candidate.assessment.evidence_json|from_json %}<li>{{ evidence }}</li>{% endfor %}</ul>{% endif %}
+      {% if candidate.assessment.error_message %}<p class="error-text">{{ candidate.assessment.error_message }}</p>{% endif %}
+    </div>
+    {% endif %}
+  </section>
+  <section class="section-band review-form-panel">
+    <div class="section-heading"><div><h2>人工决定</h2><p>批准项将进入正式 Word</p></div></div>
+    <form method="post" action="/candidates/{{ candidate.id }}/review" class="review-form">
+      {% set review = candidate.review %}{% set assessment = candidate.assessment %}
+      <label>审核决定<select name="decision" required>{% for value,label in [('include','批准纳入'),('exclude','人工排除'),('needs_review','保持待处理')] %}<option value="{{ value }}" {% if (review and review.decision == value) or (not review and assessment and assessment.decision == value) %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <label>主分类<select name="primary_category"><option value="">请选择</option>{% for value,label in categories.items() %}<option value="{{ value }}" {% if (review and review.primary_category == value) or (not review and assessment and assessment.primary_category == value) %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <fieldset><legend>副标签</legend><div class="checkbox-grid">{% for value,label in categories.items() %}<label class="check-label"><input type="checkbox" name="secondary_categories" value="{{ value }}" {% if value in secondary %}checked{% endif %}>{{ label }}</label>{% endfor %}</div></fieldset>
+      <label>英文标题<input name="title_en" value="{{ (review.title_en if review else candidate.title_en) or candidate.title_original }}"></label>
+      <label>中文标题<input name="title_zh" value="{{ (review.title_zh if review else candidate.title_zh) or '' }}"></label>
+      <label>体裁<input name="content_type" value="{{ (review.content_type if review else '') or candidate.content_type }}"></label>
+      <label>一句话核心观点<textarea name="core_claim_zh" rows="4">{{ (review.core_claim_zh if review else (assessment.core_claim_zh if assessment else '')) or '' }}</textarea></label>
+      <label>人工备注<textarea name="notes" rows="3">{{ review.notes if review else '' }}</textarea></label>
+      <button class="button primary" type="submit"><i data-lucide="save"></i>保存审核</button>
+    </form>
+  </section>
+</div>
+<section class="section-band extracted-section"><div class="section-heading"><div><h2>规范化正文</h2><p>{{ candidate.extracted_text|length }} 字符</p></div></div><pre class="extracted-text">{{ candidate.extracted_text or '正文尚未成功提取。' }}</pre></section>
+{% endblock %}

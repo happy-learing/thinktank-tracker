@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block title %}智库来源 · 智库研究追踪{% endblock %}
+{% block content %}
+<div class="page-header">
+  <div><p class="eyebrow">SOURCE REGISTRY</p><h1>智库来源</h1></div>
+  <a class="button secondary" href="/sources/export"><i data-lucide="download"></i>导出 sources.json</a>
+</div>
+
+<section class="section-band compact">
+  <form method="post" action="/sources/import" enctype="multipart/form-data" class="import-form">
+    <label class="file-field"><span>Word 或 sources.json</span><input type="file" name="file" accept=".docx,.json" required></label>
+    <button class="button primary" type="submit"><i data-lucide="file-up"></i>解析并预览</button>
+  </form>
+</section>
+
+<section class="section-band">
+  <div class="section-heading">
+    <div><h2>来源清单</h2><p>{{ sources|length }} 个来源</p></div>
+    <details class="inline-disclosure">
+      <summary class="button secondary"><i data-lucide="plus"></i>新增来源</summary>
+      <form method="post" action="/sources/save" class="edit-grid disclosure-panel">
+        <label>智库名称<input name="name" required></label><label>分类<input name="group_name"></label>
+        <label class="span-2">官网 URL<input type="url" name="homepage_url" required></label>
+        <label class="span-2">研究栏目 URL<input type="url" name="publication_url"></label>
+        <label>适配器<input name="adapter_key" value="generic"></label>
+        <label class="check-label"><input type="checkbox" name="ordered_by_date" checked>按日期排序</label>
+        <button class="button primary" type="submit"><i data-lucide="save"></i>保存</button>
+      </form>
+    </details>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>智库</th><th>分类</th><th>研究栏目</th><th>适配器</th><th>排序</th><th>状态</th><th class="actions-col">编辑</th></tr></thead>
+      <tbody>
+      {% for source in sources %}
+        <tr>
+          <td><strong>{{ source.name }}</strong><small><a href="{{ source.homepage_url }}" target="_blank" rel="noreferrer">官网</a></small></td>
+          <td>{{ source.group_name or '未分类' }}</td>
+          <td class="url-cell"><a href="{{ source.publication_url }}" target="_blank" rel="noreferrer">{{ source.publication_url }}</a></td>
+          <td class="mono">{{ source.adapter_key }}</td>
+          <td>{{ '是' if source.ordered_by_date else '否' }}</td>
+          <td><span class="status {{ 'status-complete' if source.enabled else 'status-muted' }}">{{ '启用' if source.enabled else '停用' }}</span></td>
+          <td>
+            <details class="row-disclosure">
+              <summary class="icon-button" title="编辑来源"><i data-lucide="pencil"></i></summary>
+              <form method="post" action="/sources/save" class="edit-grid row-panel">
+                <input type="hidden" name="source_id" value="{{ source.id }}">
+                <label>智库名称<input name="name" value="{{ source.name }}" required></label>
+                <label>分类<input name="group_name" value="{{ source.group_name }}"></label>
+                <label class="span-2">官网 URL<input type="url" name="homepage_url" value="{{ source.homepage_url }}" required></label>
+                <label class="span-2">研究栏目 URL<input type="url" name="publication_url" value="{{ source.publication_url }}"></label>
+                <label>适配器<input name="adapter_key" value="{{ source.adapter_key }}"></label>
+                <label class="check-label"><input type="checkbox" name="ordered_by_date" {% if source.ordered_by_date %}checked{% endif %}>按日期排序</label>
+                <label class="check-label"><input type="checkbox" name="enabled" {% if source.enabled %}checked{% endif %}>启用</label>
+                <button class="button primary" type="submit"><i data-lucide="save"></i>保存</button>
+              </form>
+            </details>
+          </td>
+        </tr>
+      {% else %}<tr><td colspan="7" class="empty-state">尚未导入智库来源</td></tr>{% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+{% endblock %}

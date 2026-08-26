@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}任务 #{{ run.id }} · 智库研究追踪{% endblock %}
+{% block content %}
+<div id="run-content" {% if run.status == 'running' %}hx-get="/runs/{{ run.id }}{% if status_filter %}?status={{ status_filter }}{% endif %}" hx-trigger="every 5s" hx-select="#run-content" hx-target="#run-content" hx-swap="outerHTML"{% endif %}>
+  <div class="page-header">
+    <div><p class="eyebrow">CRAWL RUN #{{ run.id }}</p><h1>{{ run.start_date }} 至 {{ run.end_date }}</h1></div>
+    <div class="button-group">
+      <form method="post" action="/runs/{{ run.id }}/export/report"><button class="button secondary" type="submit"><i data-lucide="file-text"></i>Word 报告</button></form>
+      <form method="post" action="/runs/{{ run.id }}/export/audit"><button class="button secondary" type="submit"><i data-lucide="sheet"></i>Excel 审计</button></form>
+      {% if run.status in ['queued', 'interrupted', 'failed'] %}<form method="post" action="/runs/{{ run.id }}/resume"><button class="button primary" type="submit"><i data-lucide="rotate-cw"></i>恢复任务</button></form>{% endif %}
+    </div>
+  </div>
+  <section class="run-status-line">
+    <span class="status status-{{ run.status }}">{{ status_label(run.status) }}</span>
+    <span>{{ run.source_runs|length }} 个来源</span>
+    <span>{{ candidates|length }} 条候选</span>
+    {% if run.error_message %}<span class="error-text">{{ run.error_message }}</span>{% endif %}
+  </section>
+
+  <section class="section-band">
+    <div class="section-heading"><div><h2>来源覆盖</h2><p>停止依据与异常均保留</p></div></div>
+    <div class="coverage-grid">
+      {% for row in run.source_runs %}
+      <div class="coverage-item">
+        <div><strong>{{ row.source.name }}</strong><span class="status status-{{ row.status }}">{{ status_label(row.status) }}</span></div>
+        <dl><dt>页数</dt><dd>{{ row.pages_scanned }}</dd><dt>链接</dt><dd>{{ row.links_discovered }}</dd><dt>停止依据</dt><dd>{{ row.stop_reason or '—' }}</dd></dl>
+        {% if row.error_message %}<p class="error-text">{{ row.error_message }}</p>{% endif %}
+        {% if run.status != 'running' %}<form method="post" action="/runs/{{ run.id }}/sources/{{ row.source_id }}/rerun"><button class="text-button" type="submit"><i data-lucide="rotate-cw"></i>仅重跑该来源</button></form>{% endif %}
+      </div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section class="section-band">
+    <div class="section-heading">
+      <div><h2>候选与复核</h2><p>{{ candidates|length }} 条记录</p></div>
+      <form class="filter-form" method="get"><select name="status" onchange="this.form.submit()"><option value="">全部状态</option>{% for value in ['needs_review','model_included','model_excluded','hard_excluded','approved','rejected'] %}<option value="{{ value }}" {% if status_filter == value %}selected{% endif %}>{{ status_label(value) }}</option>{% endfor %}</select></form>
+    </div>
+    <div class="table-wrap">
+      <table><thead><tr><th>标题 / 智库</th><th>日期</th><th>体裁</th><th>篇幅</th><th>状态</th><th class="actions-col">复核</th></tr></thead>
+        <tbody>{% for item in candidates %}<tr>
+          <td class="title-cell"><strong>{{ item.title_original or '（标题待提取）' }}</strong><small>{{ item.source.name }}</small></td>
+          <td>{{ item.published_date or '待确认' }}<small>{{ item.date_status }}</small></td>
+          <td>{{ item.content_type }}</td>
+          <td>{{ item.chinese_char_count ~ ' 字' if item.language == 'zh' else item.english_word_count ~ ' 词' }}</td>
+          <td><span class="status status-{{ item.status }}">{{ status_label(item.status) }}</span>{% if item.hard_filter_reason %}<small class="reason">{{ item.hard_filter_reason }}</small>{% endif %}</td>
+          <td><a class="icon-button" href="/candidates/{{ item.id }}" title="打开复核"><i data-lucide="clipboard-pen-line"></i></a></td>
+        </tr>{% else %}<tr><td colspan="6" class="empty-state">尚未发现候选内容</td></tr>{% endfor %}</tbody>
+      </table>
+    </div>
+  </section>
+</div>
+{% endblock %}

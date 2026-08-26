@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}人工复核 · 智库研究追踪{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">REVIEW QUEUE</p><h1>人工复核</h1></div></div>
+<section class="section-band">
+  <div class="section-heading">
+    <div><h2>候选队列</h2><p>{{ candidates|length }} 条记录</p></div>
+    <form class="filter-form" method="get"><select name="status" onchange="this.form.submit()"><option value="pending" {% if status_filter == 'pending' %}selected{% endif %}>待处理</option><option value="" {% if not status_filter %}selected{% endif %}>全部</option>{% for value in ['approved','rejected','hard_excluded','model_excluded'] %}<option value="{{ value }}" {% if status_filter == value %}selected{% endif %}>{{ status_label(value) }}</option>{% endfor %}</select></form>
+  </div>
+  <div class="table-wrap"><table><thead><tr><th>标题 / 智库</th><th>日期</th><th>体裁</th><th>状态</th><th>任务</th><th class="actions-col">复核</th></tr></thead>
+    <tbody>{% for item in candidates %}<tr><td class="title-cell"><strong>{{ item.title_original or '（标题待提取）' }}</strong><small>{{ item.source.name }}</small></td><td>{{ item.published_date or '待确认' }}<small>{{ item.date_status }}</small></td><td>{{ item.content_type }}</td><td><span class="status status-{{ item.status }}">{{ status_label(item.status) }}</span><small class="reason">{{ item.hard_filter_reason }}</small></td><td><a href="/runs/{{ item.run_id }}" class="mono">#{{ item.run_id }}</a></td><td><a class="icon-button" href="/candidates/{{ item.id }}" title="打开复核"><i data-lucide="clipboard-pen-line"></i></a></td></tr>{% else %}<tr><td colspan="6" class="empty-state">当前队列为空</td></tr>{% endfor %}</tbody>
+  </table></div>
+</section>
+{% endblock %}

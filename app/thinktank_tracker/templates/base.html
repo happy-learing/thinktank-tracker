@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}智库研究追踪{% endblock %}</title>
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
+  <script defer src="{{ url_for('static', path='vendor/htmx.min.js') }}"></script>
+  <script defer src="{{ url_for('static', path='vendor/lucide.min.js') }}"></script>
+  <script defer src="{{ url_for('static', path='app.js') }}"></script>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/">
+      <span class="brand-mark">T</span>
+      <span>智库研究追踪</span>
+    </a>
+    <span class="local-indicator"><span class="status-dot"></span>本机运行</span>
+  </header>
+  <div class="app-shell">
+    <nav class="sidebar" aria-label="主导航">
+      <a href="/" class="nav-item {% if page == 'dashboard' %}active{% endif %}"><i data-lucide="layout-dashboard"></i><span>工作台</span></a>
+      <a href="/sources" class="nav-item {% if page == 'sources' %}active{% endif %}"><i data-lucide="library"></i><span>智库来源</span></a>
+      <a href="/#runs" class="nav-item {% if page == 'runs' %}active{% endif %}"><i data-lucide="radar"></i><span>检索任务</span></a>
+      <a href="/review" class="nav-item {% if page == 'review' %}active{% endif %}"><i data-lucide="clipboard-check"></i><span>人工复核</span></a>
+      <div class="nav-spacer"></div>
+      <a href="/diagnostics" class="nav-item {% if page == 'diagnostics' %}active{% endif %}"><i data-lucide="activity"></i><span>环境诊断</span></a>
+      <a href="/settings" class="nav-item {% if page == 'settings' %}active{% endif %}"><i data-lucide="settings"></i><span>设置</span></a>
+    </nav>
+    <main class="main-content">
+      {% if request.query_params.get('message') %}
+      <div class="alert {{ request.query_params.get('level', 'success') }}" role="status">
+        <i data-lucide="{% if request.query_params.get('level') == 'error' %}circle-alert{% elif request.query_params.get('level') == 'warning' %}triangle-alert{% else %}circle-check{% endif %}"></i>
+        <span>{{ request.query_params.get('message') }}</span>
+      </div>
+      {% endif %}
+      {% block content %}{% endblock %}
+    </main>
+  </div>
+</body>
+</html>
