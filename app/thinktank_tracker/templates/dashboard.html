@@ -10,7 +10,7 @@
 </div>
 
 <section class="metrics" aria-label="工作概况">
-  <div class="metric"><span>启用来源</span><strong>{{ source_count }}</strong></div>
+  <div class="metric"><span>当前配置来源</span><strong>{{ source_count }}</strong></div>
   <div class="metric"><span>待人工处理</span><strong>{{ pending_count }}</strong></div>
   <div class="metric"><span>累计批准</span><strong>{{ approved_count }}</strong></div>
   <div class="metric"><span>最近任务</span><strong>{{ recent_runs|length }}</strong></div>
@@ -21,10 +21,11 @@
     <div><h2>新建检索任务</h2><p>日期按闭区间计算</p></div>
   </div>
   <form method="post" action="/runs" class="run-form">
+    <label>检索配置<select name="configuration_id" required>{% for configuration in configurations %}<option value="{{ configuration.id }}" {% if configuration.id == selected_configuration.id %}selected{% endif %}>{{ configuration.name }} · {{ configuration.active_source_count }} 个智库 / {{ configuration.active_entry_count }} 个入口</option>{% endfor %}</select></label>
     <label>起始日期<input type="date" name="start_date" value="{{ default_start }}" required></label>
     <span class="date-arrow"><i data-lucide="arrow-right"></i></span>
     <label>结束日期<input type="date" name="end_date" value="{{ default_end }}" required></label>
-    <button class="button primary" type="submit" {% if source_count == 0 %}disabled{% endif %}><i data-lucide="play"></i>开始检索</button>
+    <button class="button primary" type="submit" {% if not has_runnable_configuration %}disabled{% endif %}><i data-lucide="play"></i>开始检索</button>
   </form>
 </section>
 
@@ -38,12 +39,12 @@
       <tbody>
         {% for run in recent_runs %}
         <tr>
-          <td class="mono">#{{ run.id }}</td>
+          <td><span class="mono">#{{ run.id }}</span><small>{{ run.configuration_name_snapshot }}</small></td>
           <td>{{ run.start_date }} 至 {{ run.end_date }}</td>
           <td>{{ run.source_runs|length }}</td>
           <td><span class="status status-{{ run.status }}">{{ status_label(run.status) }}</span></td>
           <td>{{ run.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
-          <td><a class="icon-button" href="/runs/{{ run.id }}" title="查看任务"><i data-lucide="arrow-up-right"></i></a></td>
+          <td><div class="table-actions"><a class="icon-button" href="/runs/{{ run.id }}" title="查看任务"><i data-lucide="arrow-up-right"></i></a>{% if run.status not in ['queued','running'] %}<form method="post" action="/runs/{{ run.id }}/delete" data-confirm="将任务 #{{ run.id }} 移入回收站？候选和审核记录可随任务恢复。"><button class="icon-button danger" type="submit" title="删除任务"><i data-lucide="trash-2"></i></button></form>{% endif %}</div></td>
         </tr>
         {% else %}
         <tr><td colspan="6" class="empty-state">暂无检索任务</td></tr>

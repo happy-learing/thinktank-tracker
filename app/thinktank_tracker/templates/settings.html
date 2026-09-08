@@ -2,12 +2,14 @@
 {% block title %}设置 · 智库研究追踪{% endblock %}
 {% block content %}
 <div class="page-header"><div><p class="eyebrow">LOCAL SETTINGS</p><h1>设置</h1></div><div class="button-group"><form method="post" action="/maintenance/backup"><button class="button secondary" type="submit"><i data-lucide="archive"></i>数据库备份</button></form><form method="post" action="/maintenance/clean-cache"><button class="button secondary" type="submit"><i data-lucide="trash-2"></i>清理过期缓存</button></form></div></div>
-<form method="post" action="/settings">
+<form method="post" action="/settings" id="settings-form">
   <section class="section-band"><div class="section-heading"><div><h2>模型服务</h2><p>密钥状态：{{ '已存入 Windows 凭据管理器' if has_key else '未配置' }}</p></div></div>
     <div class="settings-grid">
-      <label class="span-2">OpenAI 兼容 Base URL<input type="url" name="api_base_url" value="{{ config.api_base_url }}" placeholder="https://api.example.com/v1"></label>
-      <label>模型名<input name="model_name" value="{{ config.model_name }}"></label>
-      <label>API 风格<select name="api_style"><option value="chat_completions" {% if config.api_style == 'chat_completions' %}selected{% endif %}>Chat Completions</option><option value="responses" {% if config.api_style == 'responses' %}selected{% endif %}>Responses</option></select></label>
+      <label>模型服务商<select name="provider_kind" id="provider-kind">{% for value,preset in model_provider_presets.items() %}<option value="{{ value }}" data-base-url="{{ preset.api_base_url }}" data-model="{{ preset.model_name }}" data-api-style="{{ preset.api_style }}" {% if config.provider_kind == value %}selected{% endif %}>{{ preset.label }}</option>{% endfor %}</select></label>
+      <label>API 风格<select name="api_style" id="api-style"><option value="chat_completions" {% if config.api_style == 'chat_completions' %}selected{% endif %}>Chat Completions</option><option value="responses" {% if config.api_style == 'responses' %}selected{% endif %}>Responses</option></select></label>
+      <label class="span-2">API Base URL<input type="url" name="api_base_url" id="api-base-url" value="{{ config.api_base_url }}" placeholder="https://api.example.com/v1" required></label>
+      <label>模型名<input name="model_name" id="model-name" value="{{ config.model_name }}" list="available-models" required><datalist id="available-models"><option value="deepseek-v4-flash"><option value="deepseek-v4-pro"></datalist></label>
+      <div class="model-discovery"><button class="button secondary" id="load-models" type="button"><i data-lucide="refresh-cw"></i>读取可用模型</button><small id="model-list-status">密钥已保存后可从接口读取</small></div>
       <label class="span-2">API 密钥<input type="password" name="api_key" autocomplete="new-password" placeholder="留空则保留现有密钥"></label>
       <label>请求超时（秒）<input type="number" name="request_timeout_seconds" min="10" max="600" value="{{ config.request_timeout_seconds }}"></label>
       <label>最大模型输入字符<input type="number" name="max_model_input_chars" min="5000" max="200000" step="1000" value="{{ config.max_model_input_chars }}"></label>
@@ -19,8 +21,37 @@
       <label>同域间隔（秒）<input type="number" name="per_domain_delay_seconds" min="2" step="0.5" value="{{ config.per_domain_delay_seconds }}"></label>
       <label>单栏目安全页数<input type="number" name="max_listing_pages" min="1" max="200" value="{{ config.max_listing_pages }}"></label>
       <label>原始缓存保留（天）<input type="number" name="raw_cache_days" min="1" value="{{ config.raw_cache_days }}"></label>
+      <fieldset class="span-2 parser-mode-field"><legend>PDF 解析模式</legend><div class="segmented-control">
+        <label><input type="radio" name="pdf_parser_mode" value="anydoc_first" {% if config.pdf_parser_mode == 'anydoc_first' %}checked{% endif %}><span>AnyDoc 优先</span></label>
+        <label><input type="radio" name="pdf_parser_mode" value="pypdf_only" {% if config.pdf_parser_mode == 'pypdf_only' %}checked{% endif %}><span>仅 pypdf</span></label>
+      </div></fieldset>
     </div>
   </section>
-  <div class="sticky-actions"><button class="button primary" type="submit"><i data-lucide="save"></i>保存设置</button></div>
+  <div class="sticky-actions button-group"><button class="button secondary" type="submit" name="action" value="test"><i data-lucide="plug-zap"></i>保存并测试连接</button><button class="button primary" type="submit" name="action" value="save"><i data-lucide="save"></i>保存设置</button></div>
 </form>
+<section class="section-band rule-manager"><div class="section-heading"><div><h2>确定性体裁规则</h2><p>共 {{ rule_total }} 条 · 允许 {{ rule_counts.allow }} · 排除 {{ rule_counts.exclude }} · 人工确认 {{ rule_counts.review }}</p></div><button class="button secondary" type="button" data-open-rule-dialog><i data-lucide="plus"></i>新增规则</button></div>
+  <form method="get" action="/settings" class="rule-filter-bar">
+    {% if return_run_id %}<input type="hidden" name="return_run_id" value="{{ return_run_id }}">{% endif %}
+    <label>搜索<input type="search" name="rule_q" value="{{ rule_q }}" placeholder="匹配值或规范体裁"></label>
+    <label>匹配方式<select name="rule_match_kind"><option value="">全部</option><option value="url_path" {% if rule_match_kind == 'url_path' %}selected{% endif %}>URL 路径段</option><option value="card_label" {% if rule_match_kind == 'card_label' %}selected{% endif %}>卡片标签</option></select></label>
+    <label>处理方式<select name="rule_action"><option value="">全部</option><option value="allow" {% if rule_action == 'allow' %}selected{% endif %}>允许</option><option value="exclude" {% if rule_action == 'exclude' %}selected{% endif %}>排除</option><option value="review" {% if rule_action == 'review' %}selected{% endif %}>人工确认</option></select></label>
+    <label>排序<select name="rule_sort"><option value="match_value" {% if rule_sort == 'match_value' %}selected{% endif %}>匹配值</option><option value="content_type" {% if rule_sort == 'content_type' %}selected{% endif %}>规范体裁</option><option value="match_kind" {% if rule_sort == 'match_kind' %}selected{% endif %}>匹配方式</option><option value="action" {% if rule_sort == 'action' %}selected{% endif %}>处理方式</option></select></label>
+    <button class="icon-button" type="submit" title="筛选规则"><i data-lucide="search"></i></button>
+  </form>
+  <div class="table-wrap"><table class="compact-table"><thead><tr><th>匹配方式</th><th>匹配值</th><th>规范体裁</th><th>处理方式</th><th class="actions-col">操作</th></tr></thead><tbody>
+    {% for rule in visible_rules %}<tr>
+      <td>{{ 'URL 路径段' if rule.match_kind == 'url_path' else '卡片标签' }}</td><td class="mono">{{ rule.match_value }}</td><td>{{ rule.content_type }}</td><td><span class="status status-{{ 'complete' if rule.action == 'allow' else 'failed' if rule.action == 'exclude' else 'incomplete' }}">{{ {'allow':'允许','exclude':'排除','review':'人工确认'}[rule.action] }}</span></td>
+      <td><div class="row-actions"><button class="icon-button" type="button" title="编辑规则" data-edit-rule data-rule-id="{{ rule.rule_id }}" data-match-kind="{{ rule.match_kind }}" data-match-value="{{ rule.match_value }}" data-content-type="{{ rule.content_type }}" data-action="{{ rule.action }}"><i data-lucide="pencil"></i></button><form method="post" action="/settings/content-type-rules/{{ rule.rule_id }}/delete" data-confirm="确定删除该体裁规则？">{% if return_run_id %}<input type="hidden" name="return_run_id" value="{{ return_run_id }}">{% endif %}<button class="icon-button danger" type="submit" title="删除规则"><i data-lucide="trash-2"></i></button></form></div></td>
+    </tr>{% else %}<tr><td colspan="5" class="empty-state">没有符合筛选条件的规则</td></tr>{% endfor %}
+  </tbody></table></div>
+  <div class="pagination"><span>筛选后 {{ filtered_rule_total }} 条 · 第 {{ rule_page }}/{{ rule_page_count }} 页</span><div class="button-group">{% if rule_page > 1 %}<a class="icon-button" title="上一页" href="/settings?rule_page={{ rule_page - 1 }}&rule_q={{ rule_q|urlencode }}&rule_match_kind={{ rule_match_kind }}&rule_action={{ rule_action }}&rule_sort={{ rule_sort }}{% if return_run_id %}&return_run_id={{ return_run_id }}{% endif %}"><i data-lucide="chevron-left"></i></a>{% endif %}{% if rule_page < rule_page_count %}<a class="icon-button" title="下一页" href="/settings?rule_page={{ rule_page + 1 }}&rule_q={{ rule_q|urlencode }}&rule_match_kind={{ rule_match_kind }}&rule_action={{ rule_action }}&rule_sort={{ rule_sort }}{% if return_run_id %}&return_run_id={{ return_run_id }}{% endif %}"><i data-lucide="chevron-right"></i></a>{% endif %}</div></div>
+</section>
+<datalist id="content-type-values">{% for value in config.content_types %}<option value="{{ value }}">{% endfor %}</datalist>
+<dialog class="rule-dialog" data-rule-dialog><form method="post" action="/settings/content-type-rules/save"><div class="dialog-heading"><h2 data-rule-dialog-title>新增体裁规则</h2><button class="icon-button" type="button" data-close-rule-dialog title="关闭"><i data-lucide="x"></i></button></div><input type="hidden" name="rule_id" value="">{% if return_run_id %}<input type="hidden" name="return_run_id" value="{{ return_run_id }}">{% endif %}<div class="settings-grid"><label>匹配方式<select name="match_kind" required><option value="card_label">卡片标签完整匹配</option><option value="url_path">URL 独立路径段</option></select></label><label>处理方式<select name="action" required><option value="review">人工确认</option><option value="allow">允许</option><option value="exclude">排除</option></select></label><label class="span-2">匹配值<input name="match_value" maxlength="100" autocomplete="off" required></label><label class="span-2">规范体裁<input name="content_type" list="content-type-values" maxlength="100" autocomplete="off" required></label></div><div class="button-group dialog-actions"><button class="button secondary" type="button" data-close-rule-dialog>取消</button><button class="button primary" type="submit"><i data-lucide="save"></i>保存规则</button></div></form></dialog>
+<section class="section-band danger-zone"><div class="section-heading"><div><h2>历史数据清理</h2><p>保留智库、入口、适配器、模型配置和 Windows 凭据；清除任务、内容、审核、附件及缓存。</p></div></div>
+  <form method="post" action="/maintenance/history/purge" class="purge-history-form" data-confirm="即将备份并清空全部历史任务、候选、审核和缓存。此操作不能通过回收站恢复，是否继续？">
+    <label>输入“清空全部历史”确认<input name="confirm_text" autocomplete="off" placeholder="清空全部历史" required></label>
+    <button class="button danger" type="submit"><i data-lucide="eraser"></i>备份并清空历史</button>
+  </form>
+</section>
 {% endblock %}

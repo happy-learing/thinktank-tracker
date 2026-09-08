@@ -1,65 +1,94 @@
 {% extends "base.html" %}
+{% macro adapter_select(selected) -%}
+<select name="adapter_key">
+  <option value="auto" {% if selected == 'auto' %}selected{% endif %}>自动识别</option>
+  <option value="generic" {% if selected == 'generic' %}selected{% endif %}>通用</option>
+  {% for key, label in [('ecfr','ECFR'),('euiss','EUISS'),('ceps','CEPS'),('martens','Martens Centre'),('egmont','Egmont'),('epc','EPC'),('elcano','Elcano')] %}<option value="{{ key }}" {% if selected == key %}selected{% endif %}>{{ label }}</option>{% endfor %}
+</select>
+{%- endmacro %}
 {% block title %}智库来源 · 智库研究追踪{% endblock %}
 {% block content %}
 <div class="page-header">
-  <div><p class="eyebrow">SOURCE REGISTRY</p><h1>智库来源</h1></div>
-  <a class="button secondary" href="/sources/export"><i data-lucide="download"></i>导出 sources.json</a>
+  <div><p class="eyebrow">SOURCE CONFIGURATIONS</p><h1>智库来源</h1></div>
+  <div class="button-group">
+    <a class="button secondary" href="/sources/export?configuration_id={{ selected_configuration.id }}"><i data-lucide="download"></i>导出当前配置</a>
+    <a class="button secondary" href="/sources/export?all_configurations=true"><i data-lucide="archive"></i>导出全部配置</a>
+  </div>
 </div>
+
+<section class="section-band compact configuration-toolbar">
+  <form method="get" action="/sources" class="configuration-select-form">
+    <label>当前检索配置<select name="configuration_id" onchange="this.form.submit()">{% for configuration in configurations %}<option value="{{ configuration.id }}" {% if configuration.id == selected_configuration.id %}selected{% endif %}>{{ configuration.name }}</option>{% endfor %}</select></label>
+  </form>
+  <div class="button-group configuration-actions">
+    <details class="inline-disclosure"><summary class="button secondary"><i data-lucide="plus"></i>新增配置</summary><form method="post" action="/configurations" class="disclosure-panel compact-form"><label>配置名称<input name="name" placeholder="例如：欧洲安全研究" required maxlength="200"></label><button class="button primary" type="submit"><i data-lucide="save"></i>创建空白配置</button></form></details>
+    <details class="inline-disclosure"><summary class="button secondary"><i data-lucide="copy"></i>复制配置</summary><form method="post" action="/configurations/{{ selected_configuration.id }}/duplicate" class="disclosure-panel compact-form"><label>新配置名称<input name="name" value="{{ selected_configuration.name }} 副本" required maxlength="200"></label><button class="button primary" type="submit"><i data-lucide="copy-check"></i>完整复制</button></form></details>
+    <details class="inline-disclosure"><summary class="icon-button" title="重命名配置"><i data-lucide="pencil"></i></summary><form method="post" action="/configurations/{{ selected_configuration.id }}/rename" class="disclosure-panel compact-form"><label>配置名称<input name="name" value="{{ selected_configuration.name }}" required maxlength="200"></label><button class="button primary" type="submit"><i data-lucide="save"></i>保存名称</button></form></details>
+    <form method="post" action="/configurations/{{ selected_configuration.id }}/delete" data-confirm="将配置“{{ selected_configuration.name }}”移入回收站？历史任务不会删除。"><button class="icon-button danger" type="submit" title="删除配置"><i data-lucide="trash-2"></i></button></form>
+  </div>
+</section>
 
 <section class="section-band compact">
   <form method="post" action="/sources/import" enctype="multipart/form-data" class="import-form">
-    <label class="file-field"><span>Word 或 sources.json</span><input type="file" name="file" accept=".docx,.json" required></label>
+    <input type="hidden" name="configuration_id" value="{{ selected_configuration.id }}">
+    <label class="file-field"><span>导入到“{{ selected_configuration.name }}”</span><input type="file" name="file" accept=".docx,.json" required></label>
     <button class="button primary" type="submit"><i data-lucide="file-up"></i>解析并预览</button>
   </form>
+  <div class="example-links"><span>格式参考：</span><a href="/sources/examples/word"><i data-lucide="file-text"></i>Word 示例</a><a href="/sources/examples/json"><i data-lucide="braces"></i>JSON 示例</a><small>Word及旧版JSON写入当前配置；新版JSON可包含多个独立配置。</small></div>
 </section>
 
 <section class="section-band">
   <div class="section-heading">
-    <div><h2>来源清单</h2><p>{{ sources|length }} 个来源</p></div>
-    <details class="inline-disclosure">
-      <summary class="button secondary"><i data-lucide="plus"></i>新增来源</summary>
+    <div><h2>{{ selected_configuration.name }}</h2><p>{{ sources|length }} 个智库；配置之间完全独立</p></div>
+    <details class="inline-disclosure"><summary class="button secondary"><i data-lucide="plus"></i>新增智库</summary>
       <form method="post" action="/sources/save" class="edit-grid disclosure-panel">
+        <input type="hidden" name="configuration_id" value="{{ selected_configuration.id }}">
         <label>智库名称<input name="name" required></label><label>分类<input name="group_name"></label>
-        <label class="span-2">官网 URL<input type="url" name="homepage_url" required></label>
-        <label class="span-2">研究栏目 URL<input type="url" name="publication_url"></label>
-        <label>适配器<input name="adapter_key" value="generic"></label>
-        <label class="check-label"><input type="checkbox" name="ordered_by_date" checked>按日期排序</label>
+        <label class="span-2">官网 URL<input type="url" name="homepage_url" required></label><label class="span-2">首个检索入口 URL<input type="url" name="publication_url" required></label>
+        <label>适配器{{ adapter_select('auto') }}</label><label class="check-label"><input type="checkbox" name="ordered_by_date" checked>按日期排序</label>
         <button class="button primary" type="submit"><i data-lucide="save"></i>保存</button>
       </form>
     </details>
   </div>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>智库</th><th>分类</th><th>研究栏目</th><th>适配器</th><th>排序</th><th>状态</th><th class="actions-col">编辑</th></tr></thead>
-      <tbody>
-      {% for source in sources %}
-        <tr>
-          <td><strong>{{ source.name }}</strong><small><a href="{{ source.homepage_url }}" target="_blank" rel="noreferrer">官网</a></small></td>
-          <td>{{ source.group_name or '未分类' }}</td>
-          <td class="url-cell"><a href="{{ source.publication_url }}" target="_blank" rel="noreferrer">{{ source.publication_url }}</a></td>
-          <td class="mono">{{ source.adapter_key }}</td>
-          <td>{{ '是' if source.ordered_by_date else '否' }}</td>
-          <td><span class="status {{ 'status-complete' if source.enabled else 'status-muted' }}">{{ '启用' if source.enabled else '停用' }}</span></td>
-          <td>
-            <details class="row-disclosure">
-              <summary class="icon-button" title="编辑来源"><i data-lucide="pencil"></i></summary>
-              <form method="post" action="/sources/save" class="edit-grid row-panel">
-                <input type="hidden" name="source_id" value="{{ source.id }}">
-                <label>智库名称<input name="name" value="{{ source.name }}" required></label>
-                <label>分类<input name="group_name" value="{{ source.group_name }}"></label>
-                <label class="span-2">官网 URL<input type="url" name="homepage_url" value="{{ source.homepage_url }}" required></label>
-                <label class="span-2">研究栏目 URL<input type="url" name="publication_url" value="{{ source.publication_url }}"></label>
-                <label>适配器<input name="adapter_key" value="{{ source.adapter_key }}"></label>
-                <label class="check-label"><input type="checkbox" name="ordered_by_date" {% if source.ordered_by_date %}checked{% endif %}>按日期排序</label>
-                <label class="check-label"><input type="checkbox" name="enabled" {% if source.enabled %}checked{% endif %}>启用</label>
-                <button class="button primary" type="submit"><i data-lucide="save"></i>保存</button>
-              </form>
-            </details>
-          </td>
-        </tr>
-      {% else %}<tr><td colspan="7" class="empty-state">尚未导入智库来源</td></tr>{% endfor %}
-      </tbody>
-    </table>
-  </div>
+  <div class="table-wrap"><table class="sources-table">
+    <thead><tr><th>智库</th><th>分类</th><th>检索入口</th><th>状态</th><th class="actions-col">操作</th></tr></thead><tbody>
+    {% for source in sources %}<tr id="source-{{ source.id }}">
+      <td><strong>{{ source.name }}</strong><small><a href="{{ source.homepage_url }}" target="_blank" rel="noreferrer">{{ source.homepage_url }}</a></small></td>
+      <td>{{ source.group_name or '未分类' }}</td>
+      <td class="source-entries-cell">
+        {% for entry in source.visible_entries %}<div class="source-entry-line">
+          <div class="source-entry-main"><a href="{{ entry.url }}" target="_blank" rel="noreferrer">{{ entry.url }}</a><small>{{ entry.adapter_key }} · {{ '按日期排序' if entry.ordered_by_date else '遍历全部分页' }} · {{ '启用' if entry.enabled else '停用' }}</small>
+            {% if entry.last_test_status != 'untested' %}<small class="test-result test-{{ entry.last_test_status }}">{{ {'success':'测试成功','warning':'测试警告','failed':'测试失败'}.get(entry.last_test_status, entry.last_test_status) }} · {{ entry.last_tested_at.strftime('%Y-%m-%d %H:%M') if entry.last_tested_at else '' }} · {{ entry.last_test_message }}</small>{% else %}<small class="test-result">尚未测试</small>{% endif %}
+          </div>
+          <div class="entry-actions">
+            <a class="icon-button" href="/sources/{{ source.id }}/entries/{{ entry.id }}/preview" title="预览发现结果"><i data-lucide="scan-search"></i></a>
+            <form method="post" action="/sources/{{ source.id }}/entries/{{ entry.id }}/toggle"><button class="icon-button {{ 'toggle-on' if entry.enabled else '' }}" type="submit" title="{{ '停用' if entry.enabled else '启用' }}检索入口"><i data-lucide="power"></i></button></form>
+            <form method="post" action="/sources/{{ source.id }}/entries/{{ entry.id }}/delete" data-confirm="将该检索入口移入回收站？历史记录会保留。"><button class="icon-button danger" type="submit" title="删除检索入口"><i data-lucide="trash-2"></i></button></form>
+            <details class="row-disclosure"><summary class="icon-button" title="编辑检索入口"><i data-lucide="pencil"></i></summary><form method="post" action="/sources/{{ source.id }}/entries/save" class="edit-grid row-panel">
+              <input type="hidden" name="entry_id" value="{{ entry.id }}"><label class="span-2">入口 URL<input type="url" name="url" value="{{ entry.url }}" required></label><label>适配器{{ adapter_select(entry.adapter_key) }}</label>
+              <label class="check-label"><input type="checkbox" name="ordered_by_date" {% if entry.ordered_by_date %}checked{% endif %}>按日期排序</label><label class="check-label"><input type="checkbox" name="enabled" {% if entry.enabled %}checked{% endif %}>启用</label>
+              <details class="span-2 advanced-rules"><summary>高级发现规则</summary><div class="edit-grid">
+                <label>文章链接选择器（每行一个）<textarea name="listing_selectors" rows="4" placeholder="article.publication h2 a">{{ (entry.listing_selectors_json|from_json)|join('\n') }}</textarea></label><label>卡片容器选择器（每行一个）<textarea name="container_selectors" rows="4" placeholder="article.publication">{{ (entry.container_selectors_json|from_json)|join('\n') }}</textarea></label>
+                <label>体裁标签选择器（每行一个）<textarea name="content_type_selectors" rows="4" placeholder=".publication-type">{{ (entry.content_type_selectors_json|from_json)|join('\n') }}</textarea></label><label>卡片日期选择器（每行一个）<textarea name="date_selectors" rows="4" placeholder="time[datetime]">{{ (entry.date_selectors_json|from_json)|join('\n') }}</textarea></label>
+                <label>允许的详情路径正则（每行一个）<textarea name="allowed_path_patterns" rows="4" placeholder="/reports/.+">{{ (entry.allowed_path_patterns_json|from_json)|join('\n') }}</textarea></label><label>排除的路径正则（每行一个）<textarea name="excluded_path_patterns" rows="4" placeholder="/author/|/tag/">{{ (entry.excluded_path_patterns_json|from_json)|join('\n') }}</textarea></label>
+              </div></details><button class="button primary" type="submit"><i data-lucide="save"></i>保存入口</button>
+            </form></details>
+          </div>
+        </div>{% else %}<span class="error-text">尚无检索入口</span>{% endfor %}
+        <details class="entry-add-disclosure"><summary class="text-button"><i data-lucide="plus"></i>新增入口</summary><form method="post" action="/sources/{{ source.id }}/entries/save" class="edit-grid entry-inline-form">
+          <label class="span-2">入口 URL<input type="url" name="url" required></label><label>适配器{{ adapter_select('auto') }}</label><label class="check-label"><input type="checkbox" name="ordered_by_date" checked>按日期排序</label><button class="button primary" type="submit"><i data-lucide="save"></i>新增入口</button>
+        </form></details>
+      </td>
+      <td><form method="post" action="/sources/{{ source.id }}/toggle"><button class="toggle-button {{ 'enabled' if source.enabled else '' }}" type="submit"><i data-lucide="power"></i>{{ '启用' if source.enabled else '停用' }}</button></form>{% if not source.visible_entries %}<small class="error-text">无检索入口</small>{% elif not (source.visible_entries|selectattr('enabled')|list) %}<small class="error-text">无启用入口</small>{% endif %}</td>
+      <td><div class="table-actions">
+        <form method="post" action="/configurations/{{ selected_configuration.id }}/sources/{{ source.id }}/test"><button class="button secondary test-links-button" type="submit" title="测试该智库的全部启用入口"><i data-lucide="plug-zap"></i>测试链接</button></form>
+        <details class="row-disclosure"><summary class="icon-button" title="编辑智库"><i data-lucide="settings-2"></i></summary><form method="post" action="/sources/save" class="edit-grid row-panel">
+          <input type="hidden" name="configuration_id" value="{{ selected_configuration.id }}"><input type="hidden" name="source_id" value="{{ source.id }}"><label>智库名称<input name="name" value="{{ source.name }}" required></label><label>分类<input name="group_name" value="{{ source.group_name }}"></label><label class="span-2">官网 URL<input type="url" name="homepage_url" value="{{ source.homepage_url }}" required></label><label class="check-label"><input type="checkbox" name="enabled" {% if source.enabled %}checked{% endif %}>启用智库</label><button class="button primary" type="submit"><i data-lucide="save"></i>保存智库</button>
+        </form></details>
+        <form method="post" action="/sources/{{ source.id }}/delete" data-confirm="将智库“{{ source.name }}”移入回收站？历史任务和审核记录会保留。"><button class="icon-button danger" type="submit" title="删除智库"><i data-lucide="trash-2"></i></button></form>
+      </div></td>
+    </tr>{% else %}<tr><td colspan="5" class="empty-state">当前配置尚未添加智库</td></tr>{% endfor %}
+    </tbody>
+  </table></div>
 </section>
 {% endblock %}

@@ -13,11 +13,63 @@ from pathlib import Path
 import httpx
 from docx import Document
 from openpyxl import Workbook
+from sqlalchemy import select
 
 from .config import get_api_key, load_config
-from .database import engine
-from .models import Source
+from .crawler import bundled_chromium_executable
+from .database import SessionLocal, engine
+from .models import CrawlRun, Source, SourceEntry
 from .paths import PATHS
+
+
+def _chromium_network_probe(url: str) -> tuple[str, str]:
+    browser_root = PATHS.root / "runtime" / "browsers"
+    if browser_root.exists():
+        os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(browser_root))
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            executable = bundled_chromium_executable(browser_root)
+            browser = playwright.chromium.launch(
+                headless=True,
+                executable_path=str(executable) if executable else None,
+            )
+            page = browser.new_page(locale="en-US")
+            response = page.goto(url, wait_until="domcontentloaded", timeout=30_000)
+            status_code = response.status if response else 0
+            browser.close()
+        status = "pass" if 0 < status_code < 400 else "warn"
+        return status, f"Chromium HTTP {status_code}: {url}"
+    except Exception as exc:
+        message = str(exc)
+        if "ERR_NETWORK_ACCESS_DENIED" in message or "10013" in message:
+            return "fail", f"本机拒绝应用进程联网: {url} ({message})"
+        return "fail", f"Chromium 访问失败: {url} ({message})"
+
+
+def _chromium_runtime_probe() -> tuple[str, str]:
+    browser_root = PATHS.root / "runtime" / "browsers"
+    if browser_root.exists():
+        os.environ.setdefault("PLAYWRIGHT_BROWSERS_PATH", str(browser_root))
+    try:
+        from playwright.sync_api import sync_playwright
+
+        with sync_playwright() as playwright:
+            executable = bundled_chromium_executable(browser_root)
+            browser = playwright.chromium.launch(
+                headless=True,
+                executable_path=str(executable) if executable else None,
+            )
+            page = browser.new_page()
+            page.set_content("<title>ThinkTankTracker Chromium Probe</title><main>ok</main>")
+            title = page.title()
+            browser.close()
+        if title != "ThinkTankTracker Chromium Probe":
+            return "fail", "Chromium 已启动，但页面渲染结果异常"
+        return "pass", "Chromium 可启动并完成本地页面渲染"
+    except Exception as exc:
+        return "fail", f"Chromium 启动失败: {exc}"
 
 
 @dataclass(frozen=True)
@@ -29,7 +81,7 @@ class DiagnosticItem:
 
 def create_database_backup() -> Path:
     PATHS.ensure()
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     sqlite_copy = PATHS.backups / f"tracker_{timestamp}.sqlite3"
     source = sqlite3.connect(PATHS.database)
     target = sqlite3.connect(sqlite_copy)
@@ -46,6 +98,49 @@ def create_database_backup() -> Path:
             output.write(config_file, "config/app.json")
     sqlite_copy.unlink(missing_ok=True)
     return archive
+
+
+def purge_history_with_backup() -> tuple[Path, int]:
+    """Remove run history while preserving source and model configuration."""
+    archive = create_database_backup()
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    export_backup = PATHS.backups / f"history_{timestamp}" / "exports"
+    cache_index: list[str] = []
+    for path in PATHS.cache.rglob("*"):
+        if path.is_file():
+            try:
+                cache_index.append(f"{path.relative_to(PATHS.cache)}\t{path.stat().st_size}")
+            except OSError:
+                continue
+    with zipfile.ZipFile(archive, "a", compression=zipfile.ZIP_DEFLATED) as output:
+        output.writestr("cache-index.tsv", "\n".join(cache_index))
+        for path in PATHS.exports.rglob("*"):
+            if path.is_file():
+                output.write(path, f"exports/{path.relative_to(PATHS.exports).as_posix()}")
+
+    with SessionLocal.begin() as session:
+        runs = session.scalars(select(CrawlRun)).all()
+        removed = len(runs)
+        for run in runs:
+            session.delete(run)
+        for source in session.scalars(select(Source)).all():
+            source.last_successful_date = None
+        for entry in session.scalars(select(SourceEntry)).all():
+            entry.last_successful_date = None
+
+    export_files = [path for path in PATHS.exports.rglob("*") if path.is_file()]
+    if export_files:
+        export_backup.mkdir(parents=True, exist_ok=True)
+        for path in export_files:
+            relative = path.relative_to(PATHS.exports)
+            destination = export_backup / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(path), str(destination))
+    if PATHS.cache.exists():
+        shutil.rmtree(PATHS.cache)
+    PATHS.cache.mkdir(parents=True, exist_ok=True)
+    PATHS.downloads.mkdir(parents=True, exist_ok=True)
+    return archive, removed
 
 
 def clean_expired_cache(days: int | None = None) -> int:
@@ -86,6 +181,10 @@ def _export_smoke_test() -> str:
     return "DOCX/XLSX 写入正常"
 
 
+def _bundled_chromium_present(browser_root: Path) -> bool:
+    return bundled_chromium_executable(browser_root) is not None
+
+
 def run_diagnostics(sources: list[Source] | None = None, include_network: bool = False) -> list[DiagnosticItem]:
     PATHS.ensure()
     results: list[DiagnosticItem] = []
@@ -104,14 +203,18 @@ def run_diagnostics(sources: list[Source] | None = None, include_network: bool =
         results.append(DiagnosticItem("SQLite", "fail", str(exc)))
     results.append(DiagnosticItem("本地端口", "pass" if _port_available() else "fail", "可自动选择端口"))
     browser_root = PATHS.root / "runtime" / "browsers"
-    browser_present = browser_root.exists() and any(browser_root.rglob("chrome.exe"))
-    results.append(
-        DiagnosticItem(
-            "捆绑 Chromium",
-            "pass" if browser_present else "warn",
-            str(browser_root) if browser_present else "开发模式可使用 Playwright 已安装浏览器；发布包必须捆绑",
+    browser_present = _bundled_chromium_present(browser_root)
+    if browser_present:
+        browser_status, browser_detail = _chromium_runtime_probe()
+        results.append(DiagnosticItem("捆绑 Chromium", browser_status, browser_detail))
+    else:
+        results.append(
+            DiagnosticItem(
+                "捆绑 Chromium",
+                "warn",
+                "开发模式可使用 Playwright 已安装浏览器；发布包必须捆绑",
+            )
         )
-    )
     try:
         results.append(DiagnosticItem("DOCX/XLSX 导出", "pass", _export_smoke_test()))
     except Exception as exc:
@@ -129,13 +232,18 @@ def run_diagnostics(sources: list[Source] | None = None, include_network: bool =
     if include_network and sources:
         with httpx.Client(timeout=15, follow_redirects=True, headers={"User-Agent": "ThinkTankTracker/0.1"}) as client:
             for source in sources:
-                try:
-                    response = client.get(source.publication_url or source.homepage_url)
-                    status = "pass" if response.status_code < 400 else "warn"
-                    detail = f"HTTP {response.status_code}"
-                except Exception as exc:
-                    status, detail = "fail", str(exc)
-                results.append(DiagnosticItem(f"连通性: {source.name}", status, detail))
+                entries = [entry for entry in source.entries if entry.enabled and entry.deleted_at is None]
+                for index, entry in enumerate(entries, 1):
+                    try:
+                        response = client.get(entry.url)
+                        status = "pass" if response.status_code < 400 else "warn"
+                        detail = f"HTTP {response.status_code}: {entry.url}"
+                    except Exception as exc:
+                        status, detail = "fail", f"{entry.url}: {exc}"
+                    label = f"连通性: {source.name}" if len(entries) == 1 else f"连通性: {source.name} #{index}"
+                    results.append(DiagnosticItem(f"HTTP {label}", status, detail))
+                    browser_status, browser_detail = _chromium_network_probe(entry.url)
+                    results.append(DiagnosticItem(f"Chromium {label}", browser_status, browser_detail))
     if include_network and model_ready:
         endpoint = config.api_base_url.rstrip("/")
         if endpoint.endswith("/chat/completions"):

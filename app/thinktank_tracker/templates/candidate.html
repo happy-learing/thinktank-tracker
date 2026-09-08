@@ -7,40 +7,69 @@
 </div>
 <div class="review-layout">
   <section class="section-band review-source">
-    <div class="section-heading"><div><h2>确定性证据</h2><p>{{ candidate.source.name }}</p></div><a class="icon-button" href="{{ candidate.original_url }}" target="_blank" rel="noreferrer" title="打开原文"><i data-lucide="external-link"></i></a></div>
+    <div class="section-heading"><div><h2>确定性证据</h2><p>{{ candidate.display_source_name or candidate.source.name }}</p></div><a class="icon-button" href="{{ candidate.original_url }}" target="_blank" rel="noreferrer" title="打开原文"><i data-lucide="external-link"></i></a></div>
     <dl class="evidence-list">
       <dt>发布日期</dt><dd>{{ candidate.published_date or '待确认' }} <span class="status status-{{ 'complete' if candidate.date_status == 'confirmed' else 'incomplete' }}">{{ candidate.date_status }}</span></dd>
       <dt>日期证据</dt><dd>{{ candidate.date_evidence or '—' }}</dd>
       <dt>体裁</dt><dd>{{ candidate.content_type }}</dd>
       <dt>体裁证据</dt><dd>{{ candidate.content_type_evidence or '—' }}</dd>
+      {% set raw_type_labels = candidate.content_type_raw_labels_json|from_json %}
+      <dt>原始体裁标签</dt><dd>{% for label in raw_type_labels %}<span class="evidence-chip">{{ label }} <button class="chip-action" type="button" data-candidate-rule-label="{{ label }}" title="将该标签添加为体裁规则"><i data-lucide="plus"></i></button></span>{% else %}—{% endfor %}</dd>
+      <dt>作者</dt><dd>{{ (candidate.authors_json|from_json)|join('、') or '待确认' }}</dd>
+      <dt>作者证据</dt><dd>{{ candidate.author_evidence or '—' }}</dd>
       <dt>正文篇幅</dt><dd>{{ candidate.english_word_count }} 英文词 / {{ candidate.chinese_char_count }} 中文字符</dd>
       <dt>提取状态</dt><dd>{{ candidate.extraction_status }}</dd>
       <dt>正文哈希</dt><dd class="mono break-all">{{ candidate.content_hash or '—' }}</dd>
     </dl>
+    {% if candidate.attachments %}<div class="attachment-list"><h3>PDF 附件</h3>{% for attachment in candidate.attachments %}
+      {% set audit = attachment.extraction_audit_json|from_json %}
+      {% set engine = audit.get('final_engine', '') %}
+      {% set attempts = audit.get('attempts', []) %}
+      <div class="attachment-row"><a href="{{ attachment.url }}" target="_blank" rel="noreferrer">{{ attachment.link_text or attachment.url }}</a><span class="status status-{{ 'complete' if attachment.extraction_status == 'complete' else 'incomplete' }}">{{ attachment.role }} · {{ attachment.extraction_status }}</span>
+        <small>解析器：{% if engine == 'anydoc' %}AnyDoc{% elif engine == 'pypdf' %}pypdf{% elif engine == 'pypdf_legacy' %}pypdf（历史）{% elif attempts %}{{ attempts[-1].get('engine', '未生成正文') }}（未生成正文）{% else %}未记录{% endif %}{% if audit.get('final_engine_version') %} {{ audit.get('final_engine_version') }}{% endif %}</small>
+        {% if audit.get('fallback_reason') %}<small>回退原因：{{ audit.get('fallback_detail') or audit.get('fallback_reason') }}</small>{% endif %}
+        {% if audit.get('ocr_pages') %}<small>OCR 页面：{{ audit.get('ocr_pages')|join(', ') }}{% if audit.get('page_count') %} / 共 {{ audit.get('page_count') }} 页{% endif %}</small>{% endif %}
+        {% if attachment.used_as_body %}<small>已作为规范化正文</small>{% endif %}{% if attachment.error_message %}<small class="error-text">{{ attachment.error_message }}</small>{% endif %}
+      </div>{% endfor %}</div>{% endif %}
     {% if candidate.assessment %}
+    {% set assessment_evidence = candidate.assessment.evidence_json|from_json %}
     <div class="model-assessment">
-      <h3>模型建议</h3>
-      <p><span class="status status-{{ candidate.status }}">{{ candidate.assessment.decision }}</span> {{ candidate.assessment.reasoning_zh }}</p>
-      {% if candidate.assessment.evidence_json %}<ul>{% for evidence in candidate.assessment.evidence_json|from_json %}<li>{{ evidence }}</li>{% endfor %}</ul>{% endif %}
+      <h3>自动初筛模型结论</h3>
+      <p><span class="status status-{{ candidate.status }}">{{ candidate.assessment.decision }}</span> 置信度 {{ '%.0f'|format(candidate.assessment.confidence * 100) }}% · {{ candidate.assessment.reasoning_zh }}</p>
+      {% if candidate.assessment.strategic_nexus %}<p><strong>战略关联：</strong>{{ candidate.assessment.strategic_nexus }}</p>{% endif %}
+      {% if candidate.assessment.exclusion_code %}<p><strong>排除代码：</strong>{{ candidate.assessment.exclusion_code }}</p>{% endif %}
+      <p><strong>证据核验：</strong>{% if assessment_evidence and '证据无法' not in candidate.hard_filter_reason %}已逐字回查{% else %}未通过，需人工复核{% endif %}</p>
+      {% if assessment_evidence %}<ul>{% for evidence in assessment_evidence %}<li>{{ evidence }}</li>{% endfor %}</ul>{% endif %}
       {% if candidate.assessment.error_message %}<p class="error-text">{{ candidate.assessment.error_message }}</p>{% endif %}
     </div>
     {% endif %}
   </section>
   <section class="section-band review-form-panel">
-    <div class="section-heading"><div><h2>人工决定</h2><p>批准项将进入正式 Word</p></div></div>
-    <form method="post" action="/candidates/{{ candidate.id }}/review" class="review-form">
+    <div class="section-heading"><div><h2>人工决定</h2><p>批准项将进入正式 Word</p></div><button class="button secondary" type="button" hx-post="/candidates/{{ candidate.id }}/model-suggestions" hx-target="#model-suggestion-panel" hx-swap="innerHTML" hx-indicator="#model-suggestion-loading" {% if not candidate.extracted_text %}disabled title="没有可分析正文"{% endif %}><i data-lucide="wand-sparkles"></i>生成字段建议</button></div>
+    <div id="model-suggestion-loading" class="htmx-indicator model-loading">正在分析提取内容…</div>
+    <div id="model-suggestion-panel">{% if candidate.model_suggestions %}{% set suggestion = candidate.model_suggestions[-1] %}{% set suggestion_error = suggestion.error_message %}{% set candidate_date_confirmed = candidate.date_status == 'confirmed' %}{% set authoritative_model_decision = candidate.assessment.decision if candidate.assessment and candidate.assessment.decision in ['include', 'exclude'] else '' %}{% set authoritative_model_reasoning = candidate.assessment.reasoning_zh if candidate.assessment else '' %}{% include "model_suggestion.html" %}{% endif %}</div>
+    <form method="post" action="/candidates/{{ candidate.id }}/review" class="review-form" id="review-form">
       {% set review = candidate.review %}{% set assessment = candidate.assessment %}
-      <label>审核决定<select name="decision" required>{% for value,label in [('include','批准纳入'),('exclude','人工排除'),('needs_review','保持待处理')] %}<option value="{{ value }}" {% if (review and review.decision == value) or (not review and assessment and assessment.decision == value) %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-      <label>主分类<select name="primary_category"><option value="">请选择</option>{% for value,label in categories.items() %}<option value="{{ value }}" {% if (review and review.primary_category == value) or (not review and assessment and assessment.primary_category == value) %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
-      <fieldset><legend>副标签</legend><div class="checkbox-grid">{% for value,label in categories.items() %}<label class="check-label"><input type="checkbox" name="secondary_categories" value="{{ value }}" {% if value in secondary %}checked{% endif %}>{{ label }}</label>{% endfor %}</div></fieldset>
-      <label>英文标题<input name="title_en" value="{{ (review.title_en if review else candidate.title_en) or candidate.title_original }}"></label>
-      <label>中文标题<input name="title_zh" value="{{ (review.title_zh if review else candidate.title_zh) or '' }}"></label>
-      <label>体裁<input name="content_type" value="{{ (review.content_type if review else '') or candidate.content_type }}"></label>
-      <label>一句话核心观点<textarea name="core_claim_zh" rows="4">{{ (review.core_claim_zh if review else (assessment.core_claim_zh if assessment else '')) or '' }}</textarea></label>
+      {% set current_decision = review.decision if review else (assessment.decision if assessment else 'needs_review') %}
+      <label>审核决定<select name="decision" data-review-field="decision" required>{% for value,label in [('include','批准纳入'),('exclude','人工排除'),('needs_review','保持待处理')] %}<option value="{{ value }}" {% if current_decision == value %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <div class="review-metadata-grid">
+        <label>发布日期<input type="date" name="published_date" data-review-field="published_date" value="{{ candidate.published_date.isoformat() if candidate.published_date else '' }}" data-required-for-include></label>
+        <label class="check-label confirm-field"><input type="checkbox" name="confirm_date" value="yes" data-required-for-include {% if candidate.date_status == 'confirmed' %}checked{% endif %}>已核对原文发布日期</label>
+      </div>
+      <label>主分类<select name="primary_category" data-review-field="primary_category" data-required-for-include><option value="">请选择</option>{% for value,label in categories.items() %}<option value="{{ value }}" {% if (review and review.primary_category == value) or (not review and assessment and assessment.primary_category == value) %}selected{% endif %}>{{ label }}</option>{% endfor %}</select></label>
+      <fieldset><legend>副标签</legend><div class="checkbox-grid" data-review-field="secondary_categories">{% for value,label in categories.items() %}<label class="check-label"><input type="checkbox" name="secondary_categories" value="{{ value }}" {% if value in secondary %}checked{% endif %}>{{ label }}</label>{% endfor %}</div></fieldset>
+      <label>英文标题<input name="title_en" data-review-field="title_en" value="{{ (review.title_en if review else candidate.title_en) or candidate.title_original }}" data-required-for-include></label>
+      <label>中文标题<input name="title_zh" data-review-field="title_zh" value="{{ (review.title_zh if review else candidate.title_zh) or '' }}" data-required-for-include></label>
+      <label>作者（每行一位）<textarea name="authors" rows="4" data-required-for-include>{{ ((review.authors_json if review else candidate.authors_json)|from_json)|join('\n') }}</textarea></label>
+      {% set selected_type = (review.content_type if review else '') or candidate.content_type %}
+      <label>体裁<select name="content_type" data-review-field="content_type" data-custom-type-select data-required-for-include><option value="">请选择</option>{% for value in content_types %}<option value="{{ value }}" {% if selected_type == value %}selected{% endif %}>{{ value }}</option>{% endfor %}<option value="__custom__" {% if selected_type and selected_type not in content_types %}selected{% endif %}>自定义体裁…</option></select></label>
+      <label class="custom-type-field {% if not selected_type or selected_type in content_types %}is-hidden{% endif %}">自定义体裁<input name="custom_content_type" data-review-field="custom_content_type" maxlength="100" value="{{ selected_type if selected_type and selected_type not in content_types else '' }}" placeholder="输入自定义体裁"></label>
+      <label>一句话核心观点<textarea name="core_claim_zh" data-review-field="core_claim_zh" rows="4" data-required-for-include>{{ (review.core_claim_zh if review else (assessment.core_claim_zh if assessment else '')) or '' }}</textarea></label>
       <label>人工备注<textarea name="notes" rows="3">{{ review.notes if review else '' }}</textarea></label>
       <button class="button primary" type="submit"><i data-lucide="save"></i>保存审核</button>
     </form>
   </section>
 </div>
+<dialog class="rule-dialog" data-candidate-rule-dialog><form method="post" action="/candidates/{{ candidate.id }}/content-type-rule"><div class="dialog-heading"><h2>添加体裁规则</h2><button class="icon-button" type="button" data-close-candidate-rule-dialog title="关闭"><i data-lucide="x"></i></button></div><div class="settings-grid"><label class="span-2">匹配值<input name="raw_label" readonly required></label><label class="span-2">规范体裁<input name="content_type" list="candidate-content-type-values" maxlength="100" required></label><label>处理方式<select name="action" required><option value="review">人工确认</option><option value="allow">允许</option><option value="exclude">排除</option></select></label></div><datalist id="candidate-content-type-values">{% for value in content_types %}<option value="{{ value }}">{% endfor %}</datalist><div class="button-group dialog-actions"><button class="button secondary" type="button" data-close-candidate-rule-dialog>取消</button><button class="button primary" type="submit"><i data-lucide="plus"></i>添加规则</button></div></form></dialog>
 <section class="section-band extracted-section"><div class="section-heading"><div><h2>规范化正文</h2><p>{{ candidate.extracted_text|length }} 字符</p></div></div><pre class="extracted-text">{{ candidate.extracted_text or '正文尚未成功提取。' }}</pre></section>
 {% endblock %}

@@ -1,0 +1,29 @@
+{% extends "base.html" %}
+{% block title %}回收站 · 智库研究追踪{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">RECYCLE BIN</p><h1>回收站</h1></div><a class="button secondary" href="/settings"><i data-lucide="archive"></i>数据库备份</a></div>
+<section class="section-band">
+  <div class="section-heading"><div><h2>已删除检索配置</h2><p>{{ configurations|length }} 条；配置内来源和历史记录均保留</p></div></div>
+  <div class="table-wrap"><table><thead><tr><th>配置</th><th>删除时间</th><th>操作</th></tr></thead><tbody>
+  {% for configuration in configurations %}<tr><td>{{ configuration.name }}</td><td>{{ configuration.deleted_at.strftime('%Y-%m-%d %H:%M') }}</td><td><form method="post" action="/trash/configurations/{{ configuration.id }}/restore"><button class="button secondary" type="submit"><i data-lucide="rotate-ccw"></i>恢复</button></form></td></tr>{% else %}<tr><td colspan="3" class="empty-state">没有已删除配置</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+<section class="section-band">
+  <div class="section-heading"><div><h2>已删除智库</h2><p>{{ sources|length }} 条；历史任务和审核记录均保留</p></div></div>
+  <div class="table-wrap"><table><thead><tr><th>智库</th><th>所属配置</th><th>删除时间</th><th>操作</th></tr></thead><tbody>
+  {% for source in sources %}<tr><td><strong>{{ source.name }}</strong><small class="url-cell">{{ source.homepage_url }}</small></td><td>{{ source.configuration.name if source.configuration else '无所属配置' }}{% if source.configuration and source.configuration.deleted_at %}<small class="error-text">配置也在回收站中</small>{% endif %}</td><td>{{ source.deleted_at.strftime('%Y-%m-%d %H:%M') }}</td><td><form method="post" action="/trash/sources/{{ source.id }}/restore"><button class="button secondary" type="submit"><i data-lucide="rotate-ccw"></i>恢复</button></form></td></tr>{% else %}<tr><td colspan="4" class="empty-state">没有已删除智库</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+<section class="section-band">
+  <div class="section-heading"><div><h2>已删除任务</h2><p>{{ runs|length }} 条；永久清除前会自动备份数据库</p></div></div>
+  <div class="table-wrap"><table><thead><tr><th>任务</th><th>日期范围</th><th>状态</th><th>删除时间</th><th>操作</th></tr></thead><tbody>
+  {% for run in runs %}<tr><td class="mono">#{{ run.id }}</td><td>{{ run.start_date }} 至 {{ run.end_date }}</td><td>{{ status_label(run.status) }}</td><td>{{ run.deleted_at.strftime('%Y-%m-%d %H:%M') }}</td><td><div class="table-actions"><form method="post" action="/trash/runs/{{ run.id }}/restore"><button class="button secondary" type="submit"><i data-lucide="rotate-ccw"></i>恢复</button></form><form method="post" action="/trash/runs/{{ run.id }}/purge" class="purge-form"><input name="confirm" placeholder="输入 DELETE" aria-label="永久清除确认"><button class="button danger" type="submit" data-confirm="永久清除任务 #{{ run.id }} 及其全部候选和审核记录？此操作只能从自动备份恢复。"><i data-lucide="trash-2"></i>永久清除</button></form></div></td></tr>{% else %}<tr><td colspan="5" class="empty-state">没有已删除任务</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+<section class="section-band">
+  <div class="section-heading"><div><h2>已删除检索入口</h2><p>{{ entries|length }} 条</p></div></div>
+  <div class="table-wrap"><table><thead><tr><th>智库</th><th>入口 URL</th><th>删除时间</th><th>操作</th></tr></thead><tbody>
+  {% for entry in entries %}<tr><td>{{ entry.source.name }}</td><td class="url-cell">{{ entry.url }}</td><td>{{ entry.deleted_at.strftime('%Y-%m-%d %H:%M') }}</td><td><div class="table-actions"><form method="post" action="/trash/entries/{{ entry.id }}/restore"><button class="button secondary" type="submit"><i data-lucide="rotate-ccw"></i>恢复</button></form><form method="post" action="/trash/entries/{{ entry.id }}/purge" class="purge-form"><input name="confirm" placeholder="输入 DELETE" aria-label="永久清除确认"><button class="button danger" type="submit" data-confirm="永久清除该入口及关联的入口级审计记录？"><i data-lucide="trash-2"></i>永久清除</button></form></div></td></tr>{% else %}<tr><td colspan="4" class="empty-state">没有已删除检索入口</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}

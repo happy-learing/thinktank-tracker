@@ -6,29 +6,33 @@ from urllib.parse import urlsplit
 
 @dataclass(frozen=True)
 class KnownSource:
-    publication_url: str
+    institution_key: str
+    homepage_url: str
     adapter_key: str
     ordered_by_date: bool = True
 
 
 KNOWN_SOURCES: dict[str, KnownSource] = {
     "iss.europa.eu": KnownSource(
-        "https://www.iss.europa.eu/publications", "euiss"
+        "euiss", "https://www.iss.europa.eu/", "euiss"
     ),
     "ceps.eu": KnownSource(
-        "https://www.ceps.eu/ceps-publications/", "ceps"
+        "ceps", "https://www.ceps.eu/", "ceps"
     ),
     "martenscentre.eu": KnownSource(
-        "https://www.martenscentre.eu/publication/", "martens"
+        "martens", "https://www.martenscentre.eu/", "martens"
     ),
     "egmontinstitute.be": KnownSource(
-        "https://egmontinstitute.be/publications/", "egmont"
+        "egmont", "https://egmontinstitute.be/", "egmont"
     ),
     "epc.eu": KnownSource(
-        "https://www.epc.eu/publications/", "epc"
+        "epc", "https://www.epc.eu/", "epc"
     ),
     "realinstitutoelcano.org": KnownSource(
-        "https://www.realinstitutoelcano.org/en/publications/", "elcano"
+        "elcano", "https://www.realinstitutoelcano.org/", "elcano"
+    ),
+    "ecfr.eu": KnownSource(
+        "ecfr", "https://ecfr.eu/", "ecfr"
     ),
 }
 

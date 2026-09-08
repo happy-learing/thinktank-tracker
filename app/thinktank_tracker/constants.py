@@ -30,6 +30,40 @@ class CandidateStatus(StrEnum):
     REJECTED = "rejected"
 
 
+class DateScope(StrEnum):
+    IN_WINDOW = "in_window"
+    AFTER_END = "after_end"
+    BEFORE_START = "before_start"
+    DATE_UNKNOWN = "date_unknown"
+
+
+class ContentKindStatus(StrEnum):
+    ELIGIBLE = "eligible"
+    EXCLUDED = "excluded"
+    NEEDS_REVIEW = "needs_review"
+
+
+class LengthStatus(StrEnum):
+    PASS = "pass"
+    BELOW = "below"
+    BORDERLINE = "borderline"
+    UNKNOWN = "unknown"
+
+
+class TopicStatus(StrEnum):
+    PENDING = "pending"
+    NOT_REQUIRED = "not_required"
+    MODEL_INCLUDED = "model_included"
+    MODEL_EXCLUDED = "model_excluded"
+    NEEDS_REVIEW = "needs_review"
+
+
+class ReviewStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+
+
 class Decision(StrEnum):
     INCLUDE = "include"
     EXCLUDE = "exclude"
@@ -71,18 +105,42 @@ MICRO_CATEGORY_ORDER = [
     PrimaryCategory.PIVOT_STATES,
 ]
 
-ALLOWED_DEEP_TYPES = {
-    "report",
-    "paper",
-    "research paper",
-    "working paper",
-    "policy brief",
-    "policy paper",
-    "analysis",
-    "in-depth analysis",
-    "brief",
-    "study",
-}
+DEFAULT_URL_CONTENT_TYPE_RULES = (
+    ("reports", "report"),
+    ("report", "report"),
+    ("analisis", "analysis"),
+    ("analysis", "analysis"),
+    ("policy-brief", "policy brief"),
+    ("briefs", "policy brief"),
+    ("articles", "article"),
+    ("paper", "research paper"),
+    ("research", "research"),
+)
+
+DEFAULT_CONTENT_TYPE_LABEL_RULES = (
+    ("analysis", "analysis", "allow"),
+    ("analyses", "analysis", "allow"),
+    ("policy brief", "policy brief", "allow"),
+    ("policy briefs", "policy brief", "allow"),
+    ("european policy briefs", "policy brief", "allow"),
+    ("security policy briefs", "policy brief", "allow"),
+    ("africa policy briefs", "policy brief", "allow"),
+    ("research paper", "research paper", "allow"),
+    ("research papers", "research paper", "allow"),
+    ("report", "report", "allow"),
+    ("reports", "report", "allow"),
+    ("commissioned report", "report", "allow"),
+    ("commissioned reports", "report", "allow"),
+    ("policy contribution", "policy contribution", "allow"),
+    ("commentary", "commentary", "exclude"),
+    ("commentaries", "commentary", "exclude"),
+)
+
+REVIEW_CONTENT_TYPES = tuple(
+    dict.fromkeys(content_type for _, content_type in DEFAULT_URL_CONTENT_TYPE_RULES)
+)
+
+ALLOWED_DEEP_TYPES = frozenset(REVIEW_CONTENT_TYPES)
 
 EXCLUDED_TYPES = {
     "commentary",
@@ -95,4 +153,3 @@ EXCLUDED_TYPES = {
     "video",
     "blog",
 }
-

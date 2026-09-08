@@ -3,12 +3,18 @@
 {% block content %}
 <div class="page-header"><div><p class="eyebrow">IMPORT REVIEW</p><h1>确认智库清单</h1></div></div>
 <section class="section-band">
-  <div class="section-heading"><div><h2>解析结果</h2><p>{{ rows|length }} 个来源</p></div></div>
-  <div class="table-wrap">
-    <table><thead><tr><th>#</th><th>分类</th><th>智库名称</th><th>官网</th><th>研究栏目</th><th>适配器</th></tr></thead>
-      <tbody>{% for row in rows %}<tr><td>{{ loop.index }}</td><td>{{ row.group_name or '未分类' }}</td><td><strong>{{ row.name }}</strong></td><td class="url-cell">{{ row.homepage_url }}</td><td class="url-cell">{{ row.publication_url }}</td><td class="mono">{{ row.adapter_key }}</td></tr>{% endfor %}</tbody>
-    </table>
+  <div class="section-heading"><div><h2>解析结果</h2><p>{{ source_count }} 个智库；{{ '将创建独立配置' if mode == 'package' else '将写入当前配置' }}</p></div></div>
+  {% for configuration in configurations %}{% set configuration_index = loop.index0 %}
+  <div class="import-configuration-group">
+    <h3>{{ configuration.name }}</h3>
+    <div class="table-wrap"><table><thead><tr><th>#</th><th>分类 / 智库</th><th>官网</th><th>检索入口</th><th>调整分组</th></tr></thead><tbody>
+    {% for row in configuration.sources %}{% set source_index = loop.index0 %}<tr>
+      <td>{{ loop.index }}</td><td><strong>{{ row.name }}</strong><small>{{ row.group_name or '未分类' }}</small></td><td class="url-cell">{{ row.homepage_url }}</td>
+      <td class="source-entries-cell">{% for entry in row.entries %}{% set entry_index = loop.index0 %}<div class="preview-entry-line"><span>{{ entry.url }}</span><small>{{ entry.adapter_key }} · {{ '按日期排序' if entry.ordered_by_date else '遍历全部分页' }}</small>{% if row.entries|length > 1 %}<form method="post" action="/sources/preview/split" class="preview-inline-action"><input type="hidden" name="configuration_index" value="{{ configuration_index }}"><input type="hidden" name="source_index" value="{{ source_index }}"><input type="hidden" name="entry_index" value="{{ entry_index }}"><input type="hidden" name="name" value="{{ row.name }}"><button class="text-button" type="submit"><i data-lucide="split"></i>拆分</button></form>{% endif %}</div>{% endfor %}</td>
+      <td>{% if configuration.sources|length > 1 %}<form method="post" action="/sources/preview/merge" class="preview-merge-form"><input type="hidden" name="configuration_index" value="{{ configuration_index }}"><input type="hidden" name="source_index" value="{{ source_index }}"><select name="target_index" aria-label="合并目标">{% for target in configuration.sources %}{% if loop.index0 != source_index %}<option value="{{ loop.index0 }}">{{ target.name }}</option>{% endif %}{% endfor %}</select><button class="button secondary" type="submit"><i data-lucide="merge"></i>合并到</button></form>{% else %}—{% endif %}</td>
+    </tr>{% endfor %}</tbody></table></div>
   </div>
-  <div class="form-actions"><a class="button secondary" href="/sources"><i data-lucide="x"></i>取消</a><form method="post" action="/sources/confirm"><button class="button primary" type="submit"><i data-lucide="check"></i>确认并保存</button></form></div>
+  {% endfor %}
+  <div class="form-actions"><a class="button secondary" href="/sources{% if target_configuration_id %}?configuration_id={{ target_configuration_id }}{% endif %}"><i data-lucide="x"></i>取消</a><form method="post" action="/sources/confirm"><button class="button primary" type="submit"><i data-lucide="check"></i>确认并保存</button></form></div>
 </section>
 {% endblock %}

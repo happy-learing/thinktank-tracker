@@ -2,7 +2,12 @@
 import os
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_all, collect_submodules
+from PyInstaller.utils.hooks import (
+    collect_all,
+    collect_submodules,
+    copy_metadata,
+    get_module_file_attribute,
+)
 
 
 spec_location = Path(SPECPATH)
@@ -15,6 +20,7 @@ executable_name = "ThinkTankTrackerDebug" if diagnostic_build else "启动智库
 datas = [
     (str(source_root / "thinktank_tracker" / "templates"), "thinktank_tracker/templates"),
     (str(source_root / "thinktank_tracker" / "static"), "thinktank_tracker/static"),
+    (str(source_root / "thinktank_tracker" / "assets"), "thinktank_tracker/assets"),
     (str(project_root / "VERSION"), "."),
 ]
 hiddenimports = collect_submodules("keyring.backends") + [
@@ -22,16 +28,23 @@ hiddenimports = collect_submodules("keyring.backends") + [
     "multipart",
     "python_multipart",
 ]
+binaries = []
 
-for package in ("playwright", "certifi"):
+for package in ("playwright", "certifi", "anydoc"):
     package_datas, package_binaries, package_hidden = collect_all(package)
     datas += package_datas
+    binaries += package_binaries
     hiddenimports += package_hidden
+anydoc_native = get_module_file_attribute("anydoc._anydoc")
+if Path(anydoc_native).name.lower() != "_anydoc.pyd":
+    raise RuntimeError(f"Unexpected AnyDoc native module: {anydoc_native}")
+binaries.append((anydoc_native, "anydoc"))
+datas += copy_metadata("firecrawl-anydoc")
 
 a = Analysis(
     [str(source_root / "thinktank_tracker" / "launcher.py")],
     pathex=[str(source_root)],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

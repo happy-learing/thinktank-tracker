@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from dataclasses import dataclass
+from datetime import date, datetime
 from pathlib import Path
 
 from docx import Document
@@ -17,8 +18,19 @@ from openpyxl.utils import get_column_letter
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session, selectinload
 
-from .constants import CATEGORY_LABELS, MICRO_CATEGORY_ORDER, CandidateStatus, CoverageStatus
-from .models import Assessment, Candidate, CrawlRun, Source, SourceRun
+from .constants import CATEGORY_LABELS, MICRO_CATEGORY_ORDER, CandidateStatus, CoverageStatus, DateScope
+from .models import (
+    Candidate,
+    CandidateAttachment,
+    CandidateDiscovery,
+    CrawlRun,
+    DateAssistBatch,
+    ListingPageAudit,
+    ModelSuggestion,
+    Source,
+    SourceEntryRun,
+    SourceRun,
+)
 from .paths import PATHS
 
 
@@ -29,6 +41,16 @@ LIGHT_GRAY = "F2F4F7"
 MID_GRAY = "6B7280"
 WHITE = "FFFFFF"
 RED = "B42318"
+REPORT_TEMPLATE_PATH = Path(__file__).with_name("assets") / "report_template.docx"
+
+
+@dataclass(frozen=True)
+class ReportArticle:
+    authors: tuple[str, ...]
+    title_en: str
+    title_zh: str
+    published_date: date
+    url: str
 
 
 def _set_run_font(run, latin: str = "Calibri", east_asia: str = "Microsoft YaHei", size: int = 10) -> None:
@@ -68,10 +90,24 @@ def _add_hyperlink(paragraph, text: str, url: str) -> None:
     run = OxmlElement("w:r")
     properties = OxmlElement("w:rPr")
     color = OxmlElement("w:color")
-    color.set(qn("w:val"), TEAL)
+    color.set(qn("w:val"), "0000FF")
     underline = OxmlElement("w:u")
     underline.set(qn("w:val"), "single")
-    properties.extend([color, underline])
+    style = OxmlElement("w:rStyle")
+    style.set(qn("w:val"), "22")
+    fonts = OxmlElement("w:rFonts")
+    for key, value in (
+        ("ascii", "Times New Roman"),
+        ("hAnsi", "Times New Roman"),
+        ("cs", "Times New Roman"),
+        ("eastAsia", "宋体"),
+    ):
+        fonts.set(qn(f"w:{key}"), value)
+    size = OxmlElement("w:sz")
+    size.set(qn("w:val"), "21")
+    size_cs = OxmlElement("w:szCs")
+    size_cs.set(qn("w:val"), "21")
+    properties.extend([style, fonts, color, underline, size, size_cs])
     run.append(properties)
     text_node = OxmlElement("w:t")
     text_node.text = text
@@ -138,116 +174,228 @@ def _article_title(candidate: Candidate) -> str:
     return english or chinese or "（标题待补）"
 
 
+def _json_string_list(value: str) -> list[str]:
+    try:
+        parsed = json.loads(value or "[]")
+    except (json.JSONDecodeError, TypeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item).strip() for item in parsed if str(item).strip()]
+
+
+def _set_reference_font(run, *, bold: bool | None = None, italic: bool | None = None) -> None:
+    run.font.name = "Times New Roman"
+    run.font.size = Pt(10.5)
+    run._element.get_or_add_rPr().rFonts.set(qn("w:ascii"), "Times New Roman")
+    run._element.get_or_add_rPr().rFonts.set(qn("w:hAnsi"), "Times New Roman")
+    run._element.get_or_add_rPr().rFonts.set(qn("w:cs"), "Times New Roman")
+    run._element.get_or_add_rPr().rFonts.set(qn("w:eastAsia"), "宋体")
+    if bold is not None:
+        run.bold = bold
+    if italic is not None:
+        run.italic = italic
+
+
+def _english_date(value: date) -> str:
+    return f"{value.strftime('%B')} {value.day}, {value.year}"
+
+
+def _chinese_date(value: date) -> str:
+    return f"{value.year}年{value.month}月{value.day}日"
+
+
+def _report_candidate_errors(candidates: list[Candidate], run: CrawlRun) -> dict[int, list[str]]:
+    failures: dict[int, list[str]] = {}
+    for candidate in candidates:
+        missing: list[str] = []
+        review = candidate.review
+        if review is None:
+            missing.append("人工审核记录")
+        else:
+            if not _json_string_list(review.authors_json):
+                missing.append("作者")
+            if not review.title_en.strip():
+                missing.append("英文标题")
+            if not review.title_zh.strip():
+                missing.append("中文标题")
+        if candidate.date_status != "confirmed" or candidate.published_date is None:
+            missing.append("确认发布日期")
+        elif not run.start_date <= candidate.published_date <= run.end_date:
+            missing.append("任务日期范围内的发布日期")
+        if missing:
+            failures[candidate.id] = missing
+    return failures
+
+
+def build_weekly_report_document(
+    start_date: date,
+    end_date: date,
+    groups: list[tuple[str, list[ReportArticle]]],
+) -> Document:
+    if not REPORT_TEMPLATE_PATH.exists():
+        raise FileNotFoundError(f"内置 Word 模板不存在：{REPORT_TEMPLATE_PATH}")
+    document = Document(REPORT_TEMPLATE_PATH)
+    title = document.add_paragraph()
+    title.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    title.paragraph_format.line_spacing = 1.25
+    title.paragraph_format.space_before = Pt(0)
+    title.paragraph_format.space_after = Pt(0)
+    title_run = title.add_run(
+        f"智库周览（{_chinese_date(start_date)}-{_chinese_date(end_date)}）"
+    )
+    _set_reference_font(title_run, bold=True)
+
+    for source_name, articles in groups:
+        heading = document.add_paragraph(style="Heading 1")
+        heading.paragraph_format.line_spacing = 1.25
+        heading.paragraph_format.keep_with_next = True
+        heading_run = heading.add_run(source_name)
+        _set_reference_font(heading_run, bold=True)
+
+        numbered = len(articles) > 1
+        for index, article in enumerate(articles, 1):
+            paragraph = document.add_paragraph()
+            paragraph.paragraph_format.line_spacing = 1.25
+            paragraph.paragraph_format.space_before = Pt(0)
+            paragraph.paragraph_format.space_after = Pt(0)
+            paragraph.paragraph_format.keep_with_next = True
+            if numbered:
+                _set_reference_font(paragraph.add_run(f"{index}. "))
+            _set_reference_font(paragraph.add_run(f"{', '.join(article.authors)}, "))
+            title_text = f"{article.title_en}（{article.title_zh}）"
+            _set_reference_font(paragraph.add_run(title_text), italic=True)
+            _set_reference_font(
+                paragraph.add_run(f", {_english_date(article.published_date)}.")
+            )
+
+            url_paragraph = document.add_paragraph()
+            url_paragraph.paragraph_format.line_spacing = 1.25
+            url_paragraph.paragraph_format.space_before = Pt(0)
+            url_paragraph.paragraph_format.space_after = Pt(0)
+            url_paragraph.paragraph_format.keep_together = True
+            _add_hyperlink(url_paragraph, article.url, article.url)
+    return document
+
+
+def _entry_snapshot(entry_run: SourceEntryRun) -> dict[str, object]:
+    try:
+        value = json.loads(entry_run.entry_config_snapshot_json or "{}")
+    except json.JSONDecodeError:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _attachment_audit_cells(value: str) -> list[object]:
+    try:
+        audit = json.loads(value or "{}")
+    except (json.JSONDecodeError, TypeError):
+        audit = {}
+    if not isinstance(audit, dict):
+        audit = {}
+    engine = str(audit.get("final_engine") or "")
+    engine_label = {
+        "anydoc": "AnyDoc",
+        "pypdf": "pypdf",
+        "pypdf_legacy": "pypdf（历史）",
+        "none": "未生成正文",
+    }.get(engine, engine or "未记录")
+    attempts = audit.get("attempts")
+    if engine == "none" and isinstance(attempts, list) and attempts:
+        last_attempt = attempts[-1]
+        if isinstance(last_attempt, dict) and last_attempt.get("engine"):
+            engine_label = f"{last_attempt['engine']}（未生成正文）"
+    duration = audit.get("duration_ms")
+    if not isinstance(duration, (int, float)):
+        duration = ""
+    ocr_pages = audit.get("ocr_pages")
+    ocr_text = ", ".join(str(item) for item in ocr_pages) if isinstance(ocr_pages, list) else ""
+    fallback = str(audit.get("fallback_detail") or audit.get("fallback_reason") or "")
+    return [
+        engine_label,
+        str(audit.get("final_engine_version") or ""),
+        duration,
+        fallback,
+        ocr_text,
+        str(audit.get("final_source") or ""),
+    ]
+
+
 def export_report(session: Session, run_id: int) -> Path:
     run = session.get(CrawlRun, run_id)
-    if not run:
+    if not run or run.deleted_at is not None:
         raise ValueError("检索任务不存在")
-    candidates = session.scalars(
+    candidates = list(session.scalars(
         select(Candidate)
         .where(
             Candidate.run_id == run_id,
             Candidate.status == CandidateStatus.APPROVED,
-            Candidate.date_status == "confirmed",
         )
         .options(selectinload(Candidate.source), selectinload(Candidate.review))
-        .order_by(Candidate.published_date, Candidate.id)
-    ).all()
-    document = Document()
-    _configure_document(document)
-    title = document.add_paragraph(style="Title")
-    title.alignment = WD_ALIGN_PARAGRAPH.LEFT
-    run_text = title.add_run("智库选题参考")
-    _set_run_font(run_text, size=28)
-    subtitle = document.add_paragraph()
-    subtitle_run = subtitle.add_run(f"{run.start_date.isoformat()} - {run.end_date.isoformat()}")
-    _set_run_font(subtitle_run, size=15)
-    subtitle_run.bold = True
-    subtitle_run.font.color.rgb = RGBColor.from_string(TEAL)
-    meta = document.add_table(rows=2, cols=3)
-    meta.style = "Table Grid"
-    values = [
-        ("发布日期范围", f"{run.start_date:%Y年%m月%d日} 至 {run.end_date:%Y年%m月%d日}"),
-        ("已批准成果", str(len(candidates))),
-        ("生成时间", datetime.now().strftime("%Y-%m-%d %H:%M")),
-    ]
-    for index, (label, value) in enumerate(values):
-        cell = meta.cell(0, index)
-        _set_cell_shading(cell, NAVY)
-        p = cell.paragraphs[0]
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        r = p.add_run(label)
-        _set_run_font(r, size=9)
-        r.bold = True
-        r.font.color.rgb = RGBColor.from_string(WHITE)
-        p = meta.cell(1, index).paragraphs[0]
-        p.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        r = p.add_run(value)
-        _set_run_font(r, size=9)
-    document.add_paragraph().add_run().add_break(WD_BREAK.PAGE)
+        .order_by(Candidate.id)
+    ).all())
+    failures = _report_candidate_errors(candidates, run)
+    if failures:
+        detail = "；".join(
+            f"候选 {candidate_id}: {', '.join(fields)}"
+            for candidate_id, fields in failures.items()
+        )
+        raise ValueError(f"正式 Word 导出失败，已批准条目不完整：{detail}")
+    source_runs = list(session.scalars(
+        select(SourceRun)
+        .where(SourceRun.run_id == run_id)
+        .options(selectinload(SourceRun.source))
+        .order_by(SourceRun.id)
+    ).all())
+    source_order = {row.source_id: index for index, row in enumerate(source_runs)}
+    source_names = {
+        row.source_id: (row.source_name_snapshot or row.source.name)
+        for row in source_runs
+    }
+    grouped: dict[int, list[Candidate]] = {}
+    for candidate in candidates:
+        grouped.setdefault(candidate.source_id, []).append(candidate)
+    ordered_source_ids = sorted(
+        grouped,
+        key=lambda source_id: (source_order.get(source_id, len(source_order)), source_id),
+    )
 
-    def add_category(category: str, heading: str) -> None:
-        document.add_heading(heading, level=1 if category == "macro" else 2)
-        rows = [item for item in candidates if item.review and item.review.primary_category == category]
-        if not rows:
-            p = document.add_paragraph("本期暂无人工批准且日期确认的符合项。")
-            p.runs[0].italic = True
-            p.runs[0].font.color.rgb = RGBColor.from_string(MID_GRAY)
-            return
-        for index, candidate in enumerate(rows, 1):
-            paragraph = document.add_paragraph(style="Article Title")
-            paragraph.add_run(f"{index}. {_article_title(candidate)}")
-            table = document.add_table(rows=0, cols=2)
-            table.style = "Table Grid"
-            fields = [
-                ("来源智库", candidate.source.name),
-                ("发布日期", candidate.published_date.isoformat()),
-                ("体裁", candidate.review.content_type or candidate.content_type),
-                ("核心观点", candidate.review.core_claim_zh),
-                ("主题归类", CATEGORY_LABELS.get(category, category)),
-            ]
-            secondary = json.loads(candidate.review.secondary_categories_json or "[]")
-            if secondary:
-                fields.append(("副标签", "、".join(CATEGORY_LABELS.get(item, item) for item in secondary)))
-            for label, value in fields:
-                cells = table.add_row().cells
-                _set_cell_shading(cells[0], LIGHT_BLUE)
-                label_run = cells[0].paragraphs[0].add_run(label)
-                _set_run_font(label_run, size=9)
-                label_run.bold = True
-                value_run = cells[1].paragraphs[0].add_run(str(value))
-                _set_run_font(value_run, size=9)
-            cells = table.add_row().cells
-            _set_cell_shading(cells[0], LIGHT_BLUE)
-            label_run = cells[0].paragraphs[0].add_run("原文链接")
-            _set_run_font(label_run, size=9)
-            label_run.bold = True
-            _add_hyperlink(cells[1].paragraphs[0], candidate.original_url, candidate.original_url)
-            document.add_paragraph()
+    report_groups: list[tuple[str, list[ReportArticle]]] = []
+    for source_id in ordered_source_ids:
+        rows = sorted(
+            grouped[source_id],
+            key=lambda item: (
+                item.published_date,
+                item.review.title_en.casefold(),
+                item.id,
+            ),
+        )
+        report_groups.append(
+            (
+                source_names.get(source_id, rows[0].source.name),
+                [
+                    ReportArticle(
+                        authors=tuple(_json_string_list(candidate.review.authors_json)),
+                        title_en=candidate.review.title_en,
+                        title_zh=candidate.review.title_zh,
+                        published_date=candidate.published_date,
+                        url=candidate.original_url,
+                    )
+                    for candidate in rows
+                ],
+            )
+        )
 
-    add_category("macro", "一、宏观")
-    document.add_heading("二、微观", level=1)
-    for number, category in enumerate(MICRO_CATEGORY_ORDER, 1):
-        add_category(category, f"2.{number} {CATEGORY_LABELS[category]}")
+    document = build_weekly_report_document(
+        run.start_date,
+        run.end_date,
+        report_groups,
+    )
 
-    approved_source_ids = {candidate.source_id for candidate in candidates}
-    no_match_sources = session.execute(
-        select(Source, SourceRun)
-        .join(SourceRun, SourceRun.source_id == Source.id)
-        .where(SourceRun.run_id == run_id, Source.id.not_in(approved_source_ids or {-1}))
-        .order_by(Source.id)
-    ).all()
-    document.add_heading("三、来源覆盖说明", level=1)
-    if no_match_sources:
-        for source, source_run in no_match_sources:
-            if source_run.status == CoverageStatus.COMPLETE:
-                statement = f"该智库在 {run.start_date:%Y.%m.%d}-{run.end_date:%m.%d} 期间暂无符合条件的深度研究。"
-            else:
-                statement = f"本期覆盖状态为“{source_run.status}”，不能判定暂无符合内容；详见独立审计表。"
-            document.add_paragraph(f"{source.name}：{statement}", style="List Bullet")
-    else:
-        document.add_paragraph("所有启用来源均至少有一篇人工批准成果。")
     PATHS.exports.mkdir(parents=True, exist_ok=True)
-    path = PATHS.exports / f"智库选题参考_{run.start_date.isoformat()}_{run.end_date.isoformat()}.docx"
+    path = PATHS.exports / (
+        f"{_chinese_date(run.start_date)}-{_chinese_date(run.end_date)}.docx"
+    )
     document.save(path)
     return path
 
@@ -277,28 +425,53 @@ def _sheet(ws, headers: list[str], rows: list[list[object]]) -> None:
 
 def export_audit_workbook(session: Session, run_id: int) -> Path:
     run = session.get(CrawlRun, run_id)
-    if not run:
+    if not run or run.deleted_at is not None:
         raise ValueError("检索任务不存在")
     source_runs = session.scalars(
         select(SourceRun)
         .where(SourceRun.run_id == run_id)
-        .options(selectinload(SourceRun.source))
+        .options(
+            selectinload(SourceRun.source),
+            selectinload(SourceRun.entry_runs).selectinload(SourceEntryRun.source_entry),
+            selectinload(SourceRun.entry_runs).selectinload(SourceEntryRun.page_audits),
+        )
         .order_by(SourceRun.id)
     ).all()
     candidates = session.scalars(
         select(Candidate)
         .where(Candidate.run_id == run_id)
-        .options(selectinload(Candidate.source), selectinload(Candidate.assessment), selectinload(Candidate.review))
+        .options(
+            selectinload(Candidate.source),
+            selectinload(Candidate.assessment),
+            selectinload(Candidate.review),
+            selectinload(Candidate.discoveries).selectinload(CandidateDiscovery.source_entry),
+            selectinload(Candidate.attachments),
+            selectinload(Candidate.model_suggestions),
+        )
         .order_by(Candidate.source_id, Candidate.id)
     ).all()
+    source_names = {
+        row.source_id: (row.source_name_snapshot or row.source.name)
+        for row in source_runs
+    }
+    entry_urls = {
+        entry_run.source_entry_id: (entry_run.entry_url_snapshot or entry_run.source_entry.url)
+        for row in source_runs
+        for entry_run in row.entry_runs
+    }
     wb = Workbook()
     overview = wb.active
     overview.title = "概览"
     summary_rows = [
+        ["检索配置", run.configuration_name_snapshot],
         ["日期范围", f"{run.start_date.isoformat()} 至 {run.end_date.isoformat()}"],
         ["任务状态", run.status],
         ["来源数量", len(source_runs)],
+        ["检索入口数量", sum(len(item.entry_runs) for item in source_runs)],
         ["候选总数", len(candidates)],
+        ["日期范围内全部内容", sum(item.date_scope == DateScope.IN_WINDOW for item in candidates)],
+        ["日期待确认", sum(item.date_scope == DateScope.DATE_UNKNOWN for item in candidates)],
+        ["日期范围外", sum(item.date_scope in {DateScope.AFTER_END, DateScope.BEFORE_START} for item in candidates)],
         ["人工批准", sum(item.status == CandidateStatus.APPROVED for item in candidates)],
         ["待人工处理", sum(item.status == CandidateStatus.NEEDS_REVIEW for item in candidates)],
         ["覆盖不完整/失败", sum(item.status != CoverageStatus.COMPLETE for item in source_runs)],
@@ -307,9 +480,9 @@ def export_audit_workbook(session: Session, run_id: int) -> Path:
     _sheet(overview, ["指标", "值"], summary_rows)
     coverage_rows = [
         [
-            row.source.name,
-            row.source.publication_url,
+            row.source_name_snapshot or row.source.name,
             row.status,
+            len(row.entry_runs),
             row.pages_scanned,
             row.links_discovered,
             row.earliest_date.isoformat() if row.earliest_date else "",
@@ -320,9 +493,61 @@ def export_audit_workbook(session: Session, run_id: int) -> Path:
         for row in source_runs
     ]
     _sheet(
-        wb.create_sheet("来源覆盖"),
-        ["智库", "研究栏目", "覆盖状态", "访问页数", "发现链接", "最早日期", "最晚日期", "停止依据", "错误"],
+        wb.create_sheet("智库覆盖"),
+        ["智库", "覆盖状态", "入口数量", "访问页数", "发现链接", "最早日期", "最晚日期", "停止依据", "错误"],
         coverage_rows,
+    )
+    entry_coverage_rows = [
+        [
+            row.source_name_snapshot or row.source.name,
+            entry_run.entry_url_snapshot or entry_run.source_entry.url,
+            _entry_snapshot(entry_run).get("adapter_key", entry_run.source_entry.adapter_key),
+            entry_run.status,
+            entry_run.pages_scanned,
+            entry_run.links_discovered,
+            entry_run.earliest_date.isoformat() if entry_run.earliest_date else "",
+            entry_run.latest_date.isoformat() if entry_run.latest_date else "",
+            entry_run.ordering_status,
+            entry_run.boundary_page_number or "",
+            entry_run.stop_reason,
+            entry_run.error_message,
+        ]
+        for row in source_runs
+        for entry_run in row.entry_runs
+    ]
+    _sheet(
+        wb.create_sheet("入口覆盖"),
+        ["智库", "检索入口", "适配器", "覆盖状态", "访问页数", "发现链接", "最早日期", "最晚日期", "顺序验证", "边界页", "停止依据", "错误"],
+        entry_coverage_rows,
+    )
+    page_rows = [
+        [
+            row.source_name_snapshot or row.source.name,
+            entry_run.entry_url_snapshot or entry_run.source_entry.url,
+            audit.page_number,
+            audit.page_url,
+            audit.cards_found,
+            audit.accepted_count,
+            audit.rejected_count,
+            audit.in_window_count,
+            audit.after_end_count,
+            audit.before_start_count,
+            audit.date_unknown_count,
+            audit.earliest_date.isoformat() if audit.earliest_date else "",
+            audit.latest_date.isoformat() if audit.latest_date else "",
+            audit.ordering_status,
+            "是" if audit.is_boundary_page else "否",
+            audit.stop_evidence,
+            audit.sample_links_json,
+        ]
+        for row in source_runs
+        for entry_run in row.entry_runs
+        for audit in entry_run.page_audits
+    ]
+    _sheet(
+        wb.create_sheet("逐页发现审计"),
+        ["智库", "入口", "页码", "栏目页", "卡片数", "接收数", "拒绝数", "范围内", "过新", "过旧", "日期不明", "最早日期", "最晚日期", "顺序", "边界页", "停止证据", "样例链接"],
+        page_rows,
     )
     no_match_rows = []
     for row in source_runs:
@@ -333,33 +558,72 @@ def export_audit_workbook(session: Session, run_id: int) -> Path:
                 if row.status == CoverageStatus.COMPLETE
                 else "覆盖不完整，不能判定暂无符合内容"
             )
-            no_match_rows.append([row.source.name, row.status, statement, row.error_message])
+            no_match_rows.append(
+                [
+                    row.source_name_snapshot or row.source.name,
+                    row.status,
+                    statement,
+                    row.error_message,
+                ]
+            )
     _sheet(wb.create_sheet("无符合项智库"), ["智库", "覆盖状态", "结论", "说明"], no_match_rows)
     date_rows = [
-        [item.source.name, item.title_original, item.date_status, item.date_evidence, item.original_url]
+        [
+            source_names.get(item.source_id, item.source.name),
+            item.title_original,
+            item.date_status,
+            item.date_evidence,
+            item.original_url,
+        ]
         for item in candidates
         if item.date_status != "confirmed"
     ]
     _sheet(wb.create_sheet("日期待确认"), ["智库", "标题", "日期状态", "日期证据", "原文链接"], date_rows)
     failure_rows = [
-        [item.source.name, item.title_original, item.extraction_status, item.hard_filter_reason, item.original_url]
+        [
+            source_names.get(item.source_id, item.source.name),
+            item.title_original,
+            item.extraction_status,
+            item.hard_filter_reason,
+            item.fetch_audit_json,
+            item.original_url,
+        ]
         for item in candidates
         if item.extraction_status not in {"complete"}
     ]
-    _sheet(wb.create_sheet("抓取失败"), ["智库", "标题", "提取状态", "问题", "原文链接"], failure_rows)
+    _sheet(
+        wb.create_sheet("抓取失败"),
+        ["智库", "标题", "提取状态", "问题", "URL 请求尝试", "原文链接"],
+        failure_rows,
+    )
     candidate_rows = []
     for item in candidates:
         candidate_rows.append(
             [
                 item.id,
-                item.source.name,
+                source_names.get(item.source_id, item.source.name),
                 item.title_original,
+                "\n".join(_json_string_list(item.authors_json)),
+                item.author_evidence,
+                "\n".join(_json_string_list(item.review.authors_json)) if item.review else "",
                 item.published_date.isoformat() if item.published_date else "",
+                item.date_scope,
                 item.date_status,
                 item.content_type,
+                item.content_type_evidence,
+                "\n".join(
+                    row.listing_content_type_evidence
+                    for row in item.discoveries
+                    if row.listing_content_type_evidence
+                ),
+                item.content_kind_status,
                 item.language,
                 item.english_word_count,
                 item.chinese_char_count,
+                item.length_status,
+                item.extraction_status,
+                item.topic_status,
+                item.review_status,
                 item.status,
                 item.hard_filter_reason,
                 item.assessment.decision if item.assessment else "",
@@ -367,20 +631,44 @@ def export_audit_workbook(session: Session, run_id: int) -> Path:
                 item.review.decision if item.review else "",
                 item.review.notes if item.review else "",
                 item.content_hash,
+                "\n".join(
+                    dict.fromkeys(
+                        entry_urls.get(row.source_entry_id, row.source_entry.url)
+                        for row in item.discoveries
+                    )
+                ),
+                "\n".join(dict.fromkeys(row.listing_url for row in item.discoveries if row.listing_url)),
+                item.fetch_audit_json,
                 item.original_url,
             ]
         )
     _sheet(
-        wb.create_sheet("全部候选"),
+        wb.create_sheet("全部正式内容"),
         [
-            "ID", "智库", "标题", "发布日期", "日期状态", "体裁", "语言", "英文词数", "中文字符数",
-            "当前状态", "硬过滤/异常原因", "模型决定", "模型主分类", "人工决定", "人工备注", "正文哈希", "原文链接",
+            "ID", "智库", "标题", "自动作者", "作者证据", "人工作者", "发布日期", "日期范围", "日期状态", "体裁", "体裁证据", "列表体裁证据", "体裁状态", "语言", "英文词数", "中文字符数",
+            "篇幅状态", "提取状态", "主题状态", "审核状态", "旧版兼容状态", "筛选/异常原因", "模型决定", "模型主分类", "人工决定", "人工备注", "正文哈希",
+            "发现入口", "发现栏目页", "URL 请求尝试", "原文链接",
         ],
         candidate_rows,
     )
+    full_headers = [
+        "ID", "智库", "标题", "自动作者", "作者证据", "人工作者", "发布日期", "日期范围", "日期状态", "体裁", "体裁证据", "列表体裁证据", "体裁状态", "语言", "英文词数", "中文字符数",
+        "篇幅状态", "提取状态", "主题状态", "审核状态", "旧版兼容状态", "筛选/异常原因", "模型决定", "模型主分类", "人工决定", "人工备注", "正文哈希",
+        "发现入口", "发现栏目页", "URL 请求尝试", "原文链接",
+    ]
+    _sheet(
+        wb.create_sheet("日期范围内完整清单"),
+        full_headers,
+        [row for row, item in zip(candidate_rows, candidates) if item.date_scope == DateScope.IN_WINDOW],
+    )
+    _sheet(
+        wb.create_sheet("范围外内容"),
+        full_headers,
+        [row for row, item in zip(candidate_rows, candidates) if item.date_scope in {DateScope.AFTER_END, DateScope.BEFORE_START}],
+    )
     model_rows = [
         [
-            item.source.name,
+            source_names.get(item.source_id, item.source.name),
             item.title_original,
             item.assessment.provider_model,
             item.assessment.input_chars,
@@ -391,6 +679,79 @@ def export_audit_workbook(session: Session, run_id: int) -> Path:
         if item.assessment
     ]
     _sheet(wb.create_sheet("模型调用统计"), ["智库", "标题", "模型", "输入字符", "置信度", "错误"], model_rows)
+    attachment_rows = [
+        [
+            source_names.get(item.source_id, item.source.name),
+            item.title_original,
+            attachment.role,
+            attachment.link_text,
+            attachment.status_code or "",
+            attachment.content_type,
+            attachment.extraction_status,
+            *_attachment_audit_cells(attachment.extraction_audit_json),
+            "是" if attachment.used_as_body else "否",
+            attachment.content_hash,
+            attachment.error_message,
+            attachment.url,
+        ]
+        for item in candidates
+        for attachment in item.attachments
+    ]
+    _sheet(
+        wb.create_sheet("PDF附件"),
+        [
+            "智库", "文章", "附件角色", "链接文字", "HTTP状态", "响应类型", "提取状态",
+            "解析器", "解析器版本", "解析耗时（毫秒）", "回退原因", "OCR页码", "最终正文来源",
+            "作为正文", "哈希", "错误", "附件URL",
+        ],
+        attachment_rows,
+    )
+    suggestion_rows = [
+        [
+            source_names.get(item.source_id, item.source.name),
+            item.title_original,
+            suggestion.provider_model,
+            suggestion.created_at.isoformat(timespec="seconds"),
+            suggestion.decision,
+            suggestion.suggested_date.isoformat() if suggestion.suggested_date else "",
+            suggestion.date_evidence,
+            suggestion.content_type,
+            suggestion.primary_category,
+            suggestion.title_zh,
+            suggestion.core_claim_zh,
+            suggestion.confidence,
+            suggestion.input_chars,
+            suggestion.error_message,
+        ]
+        for item in candidates
+        for suggestion in item.model_suggestions
+    ]
+    _sheet(
+        wb.create_sheet("人工触发模型建议"),
+        ["智库", "文章", "模型", "调用时间", "建议决定", "建议日期", "日期证据", "建议体裁", "主分类", "中文标题", "核心观点", "置信度", "输入字符", "错误"],
+        suggestion_rows,
+    )
+    date_assists = session.scalars(
+        select(DateAssistBatch).where(DateAssistBatch.run_id == run_id).order_by(DateAssistBatch.id)
+    ).all()
+    _sheet(
+        wb.create_sheet("模型日期辅助"),
+        ["入口ID", "栏目页", "内容URL", "模型", "建议日期", "原文证据", "证据已验证", "错误", "调用时间"],
+        [
+            [
+                item.source_entry_id,
+                item.listing_url,
+                item.item_url,
+                item.provider_model,
+                item.suggested_date.isoformat() if item.suggested_date else "",
+                item.evidence_quote,
+                "是" if item.verified else "否",
+                item.error_message,
+                item.created_at.isoformat(timespec="seconds"),
+            ]
+            for item in date_assists
+        ],
+    )
     for ws in wb.worksheets:
         ws.sheet_view.showGridLines = False
     PATHS.exports.mkdir(parents=True, exist_ok=True)

@@ -1,6 +1,7 @@
 $ErrorActionPreference = "Stop"
 $ProjectRoot = (Resolve-Path (Split-Path -Parent $PSScriptRoot)).Path
-$ZipPath = Join-Path $ProjectRoot "release\ThinkTankTracker-win-x64-portable-full-v0.1.0.zip"
+$Version = (Get-Content -LiteralPath (Join-Path $ProjectRoot "VERSION") -Raw).Trim()
+$ZipPath = Join-Path $ProjectRoot "release\ThinkTankTracker-win-x64-portable-full-v$Version.zip"
 $QaParent = Join-Path $ProjectRoot ".portable-qa"
 $TargetName = "$([char]0x4E2D)$([char]0x6587) $([char]0x8DEF)$([char]0x5F84)"
 $TargetRoot = Join-Path $QaParent $TargetName

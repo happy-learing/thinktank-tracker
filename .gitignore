@@ -19,6 +19,7 @@ htmlcov/
 # Runtime state. Sources and prompt versions are exchanged through sources.json,
 # not by committing a workstation database or API credentials.
 workspace/
+workspace-qa-*/
 *.sqlite
 *.sqlite3
 *.sqlite3-shm
@@ -37,6 +38,8 @@ dist/
 release/
 .portable-qa/
 .package-inspect/
+.live-probe-workspace*/
+.tmp-tests/
 *.spec.bak
 
 # Editor and operating-system metadata

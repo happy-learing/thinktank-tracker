@@ -12,6 +12,7 @@ $DistRoot = Join-Path $ProjectRoot "dist"
 $ReleaseRoot = Join-Path $ProjectRoot "release"
 $PackageName = "ThinkTankTracker-win-x64-portable-full-v$Version"
 $PackageRoot = Join-Path $DistRoot $PackageName
+$ZipPath = Join-Path $ReleaseRoot "$PackageName.zip"
 $SpecPath = Join-Path $ProjectRoot "build\portable.spec"
 
 if (-not [Environment]::Is64BitOperatingSystem) {
@@ -23,12 +24,31 @@ if (-not (Test-Path -LiteralPath $PythonPath)) {
 if (-not (Test-Path -LiteralPath $BrowserRoot)) {
     throw "Bundled Chromium is missing. Run scripts\install-browser.ps1 first."
 }
+if (Test-Path -LiteralPath $PackageRoot) {
+    throw "Versioned package already exists and will not be overwritten: $PackageRoot. Bump VERSION before building."
+}
+if (Test-Path -LiteralPath $ZipPath) {
+    throw "Release ZIP already exists and will not be overwritten: $ZipPath. Bump VERSION before building."
+}
 if (-not $SkipTests) {
-    & $PythonPath -m pytest
-    if ($LASTEXITCODE -ne 0) { throw "Tests failed." }
+    $TestTempRoot = Join-Path $ProjectRoot "workspace\build-test-temp"
+    $TestRunRoot = Join-Path $TestTempRoot ([guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $TestRunRoot | Out-Null
+    $PreviousTemp = $env:TEMP
+    $PreviousTmp = $env:TMP
+    try {
+        $env:TEMP = $TestRunRoot
+        $env:TMP = $TestRunRoot
+        & $PythonPath -m pytest --basetemp (Join-Path $TestRunRoot "pytest")
+        if ($LASTEXITCODE -ne 0) { throw "Tests failed." }
+    }
+    finally {
+        $env:TEMP = $PreviousTemp
+        $env:TMP = $PreviousTmp
+    }
 }
 
-foreach ($Target in @($BuildRoot, $PackageRoot)) {
+foreach ($Target in @($BuildRoot)) {
     $Parent = Split-Path -Parent $Target
     if ($Parent -notin @($ProjectRoot, $DistRoot)) {
         throw "Refusing to clean path outside project build roots: $Target"
@@ -45,15 +65,36 @@ $PyInstallerOutput = Join-Path $DistRoot "ThinkTankTracker"
 if (-not (Test-Path -LiteralPath $PyInstallerOutput)) {
     throw "PyInstaller output not found: $PyInstallerOutput"
 }
-Move-Item -LiteralPath $PyInstallerOutput -Destination $PackageRoot
+$MoveSucceeded = $false
+for ($Attempt = 1; $Attempt -le 5; $Attempt++) {
+    try {
+        Move-Item -LiteralPath $PyInstallerOutput -Destination $PackageRoot -ErrorAction Stop
+        $MoveSucceeded = $true
+        break
+    }
+    catch {
+        if ($Attempt -eq 5) { throw }
+        Start-Sleep -Seconds 2
+    }
+}
+if (-not $MoveSucceeded) {
+    throw "Could not move PyInstaller output into the versioned package directory."
+}
 
 $RuntimeRoot = Join-Path $PackageRoot "runtime"
 $WorkspaceRoot = Join-Path $PackageRoot "workspace"
 New-Item -ItemType Directory -Force -Path $RuntimeRoot, $WorkspaceRoot | Out-Null
-Copy-Item -LiteralPath $BrowserRoot -Destination (Join-Path $RuntimeRoot "browsers") -Recurse
-$BundledLinkMetadata = Join-Path $RuntimeRoot "browsers\.links"
-if (Test-Path -LiteralPath $BundledLinkMetadata) {
-    Remove-Item -LiteralPath $BundledLinkMetadata -Recurse -Force
+$BundledBrowserRoot = Join-Path $RuntimeRoot "browsers"
+New-Item -ItemType Directory -Force -Path $BundledBrowserRoot | Out-Null
+$BrowserComponents = @(
+    Get-ChildItem -LiteralPath $BrowserRoot -Directory |
+        Where-Object { $_.Name -match '^(chromium|chromium_headless_shell|ffmpeg|winldd)-\d+$' }
+)
+if (-not ($BrowserComponents | Where-Object { $_.Name -match '^chromium-\d+$' })) {
+    throw "Playwright full Chromium is missing. Run scripts\install-browser.ps1 first."
+}
+foreach ($Component in $BrowserComponents) {
+    Copy-Item -LiteralPath $Component.FullName -Destination $BundledBrowserRoot -Recurse
 }
 New-Item -ItemType Directory -Force -Path `
     (Join-Path $WorkspaceRoot "config"), `
@@ -63,22 +104,46 @@ New-Item -ItemType Directory -Force -Path `
     (Join-Path $WorkspaceRoot "logs") | Out-Null
 Copy-Item -LiteralPath (Join-Path $ProjectRoot "VERSION") -Destination $PackageRoot
 Copy-Item -LiteralPath (Join-Path $ProjectRoot "requirements.lock") -Destination $PackageRoot
+Copy-Item -LiteralPath (Join-Path $ProjectRoot "THIRD_PARTY_NOTICES.txt") -Destination $PackageRoot
+$BuildSupportRoot = Join-Path $PackageRoot "build-support"
+New-Item -ItemType Directory -Force -Path $BuildSupportRoot | Out-Null
+Copy-Item -LiteralPath (Join-Path $ProjectRoot "scripts\build-portable.ps1") -Destination $BuildSupportRoot
+Copy-Item -LiteralPath (Join-Path $ProjectRoot "build\portable.spec") -Destination $BuildSupportRoot
+Copy-Item -LiteralPath (Join-Path $ProjectRoot "pyproject.toml") -Destination $BuildSupportRoot
 $PortableGuides = @(Get-ChildItem -LiteralPath (Join-Path $ProjectRoot "docs") -File -Filter "*.txt")
 if ($PortableGuides.Count -ne 1) {
     throw "Expected exactly one portable guide text file."
 }
 Copy-Item -LiteralPath $PortableGuides[0].FullName -Destination $PackageRoot
+$ExampleDirectoryName = -join @(
+    [char]0x793A, [char]0x4F8B, [char]0x6587, [char]0x4EF6
+)
+$ReportExampleName = (-join @(
+    [char]0x667A, [char]0x5E93, [char]0x5468, [char]0x89C8,
+    [char]0x683C, [char]0x5F0F, [char]0x793A, [char]0x4F8B
+)) + ".docx"
+$ReportExampleSource = Join-Path `
+    (Join-Path (Join-Path $ProjectRoot "docs") $ExampleDirectoryName) `
+    $ReportExampleName
+if (-not (Test-Path -LiteralPath $ReportExampleSource)) {
+    throw "User-facing report example not found: $ReportExampleSource"
+}
+$ExampleRoot = Join-Path $PackageRoot $ExampleDirectoryName
+New-Item -ItemType Directory -Force -Path $ExampleRoot | Out-Null
+Copy-Item -LiteralPath $ReportExampleSource -Destination $ExampleRoot
 $VerifyName = "$([char]0x9A8C)$([char]0x8BC1)$([char]0x5B8C)$([char]0x6574)$([char]0x6027).ps1"
 Copy-Item -LiteralPath (Join-Path $ProjectRoot "scripts\verify-package.ps1") -Destination (Join-Path $PackageRoot $VerifyName)
 
 $BuildInfo = [ordered]@{
     product = "ThinkTankTracker"
     version = $Version
-    database_schema = 1
+    database_schema = 10
     platform = "Windows x64"
     build_time = (Get-Date).ToUniversalTime().ToString("o")
     python = (& $PythonPath --version 2>&1).ToString()
     dependency_lock = "requirements.lock"
+    pdf_parser = "firecrawl-anydoc==0.2.4 with pypdf fallback"
+    browser_runtime = "chromium (full)"
 }
 $BuildInfo | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $PackageRoot "BUILDINFO.json") -Encoding UTF8
 
@@ -96,7 +161,5 @@ $Lines = Get-ChildItem -LiteralPath $PackageRoot -File -Recurse |
     }
 $Lines | Set-Content -LiteralPath $ChecksumPath -Encoding UTF8
 
-$ZipPath = Join-Path $ReleaseRoot "$PackageName.zip"
-if (Test-Path -LiteralPath $ZipPath) { Remove-Item -LiteralPath $ZipPath -Force }
 Compress-Archive -LiteralPath $PackageRoot -DestinationPath $ZipPath -CompressionLevel Optimal
 Write-Host "Portable package: $ZipPath"

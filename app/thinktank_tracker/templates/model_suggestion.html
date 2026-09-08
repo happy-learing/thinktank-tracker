@@ -1,0 +1,23 @@
+{% if suggestion_error %}<div class="alert error model-suggestion-error"><i data-lucide="circle-alert"></i><span>{{ suggestion_error }}</span></div>{% endif %}
+{% if suggestion and not suggestion.error_message %}
+{% set displayed_decision = authoritative_model_decision or 'needs_review' %}
+<section class="model-suggestion" data-model-suggestion>
+  <div class="model-suggestion-head"><div><strong>模型字段建议</strong><small>{{ suggestion.provider_model }} · 置信度 {{ '%.0f'|format(suggestion.confidence * 100) }}%</small></div><span class="status status-{{ 'model_included' if displayed_decision == 'include' else 'model_excluded' if displayed_decision == 'exclude' else 'needs_review' }}">{{ displayed_decision }}</span></div>
+  {% if authoritative_model_decision %}<p>主题决定沿用自动初筛结论；本次调用只补充人工复核字段，不重新判断纳入或排除。</p>{% else %}<p>当前没有可沿用的自动初筛结论；本次调用只补充人工复核字段，主题保持待处理。</p>{% endif %}
+  {% set field_confidences = suggestion.field_confidences_json|from_json %}
+  {% if field_confidences %}<div class="field-confidence-list" aria-label="逐字段置信度">{% for field_name, score in field_confidences.items() %}<span>{{ suggestion_field_label(field_name) }} {{ '%.0f'|format(score * 100) }}%</span>{% endfor %}</div>{% endif %}
+  <div class="suggestion-fields">
+    <label class="suggestion-field"><input type="checkbox" data-suggestion-field="decision" checked><span>主题结论</span><strong>{{ displayed_decision }}</strong><input type="hidden" data-suggestion-value value="{{ displayed_decision }}"></label>
+    {% if suggestion.suggested_date %}<label class="suggestion-field"><input type="checkbox" data-suggestion-field="published_date" {% if not candidate_date_confirmed %}checked{% endif %}><span>发布日期</span><strong>{{ suggestion.suggested_date }}</strong><input type="hidden" data-suggestion-value value="{{ suggestion.suggested_date.isoformat() }}"><small>{{ suggestion.date_evidence }}{% if candidate_date_confirmed %}；当前日期已由确定性证据确认，默认不覆盖{% endif %}</small></label>{% endif %}
+    {% if suggestion.primary_category %}<label class="suggestion-field"><input type="checkbox" data-suggestion-field="primary_category" checked><span>主分类</span><strong>{{ category_label(suggestion.primary_category) }}</strong><input type="hidden" data-suggestion-value value="{{ suggestion.primary_category }}"></label>{% endif %}
+    {% if suggestion.secondary_categories_json and suggestion.secondary_categories_json != '[]' %}<label class="suggestion-field"><input type="checkbox" data-suggestion-field="secondary_categories" checked><span>副标签</span><strong>{% for item in suggestion.secondary_categories_json|from_json %}{{ category_label(item) }}{% if not loop.last %}、{% endif %}{% endfor %}</strong><input type="hidden" data-suggestion-value value='{{ suggestion.secondary_categories_json|e }}'></label>{% endif %}
+    {% if suggestion.title_en %}<label class="suggestion-field"><input type="checkbox" data-suggestion-field="title_en" checked><span>英文标题</span><strong>{{ suggestion.title_en }}</strong><input type="hidden" data-suggestion-value value="{{ suggestion.title_en }}"></label>{% endif %}
+    {% if suggestion.title_zh %}<label class="suggestion-field"><input type="checkbox" data-suggestion-field="title_zh" checked><span>中文标题</span><strong>{{ suggestion.title_zh }}</strong><input type="hidden" data-suggestion-value value="{{ suggestion.title_zh }}"></label>{% endif %}
+    {% if suggestion.content_type in content_types %}<label class="suggestion-field"><input type="checkbox" data-suggestion-field="content_type" checked><span>体裁</span><strong>{{ suggestion.content_type }}</strong><input type="hidden" data-suggestion-value value="{{ suggestion.content_type }}"></label>{% endif %}
+    {% if suggestion.core_claim_zh %}<label class="suggestion-field"><input type="checkbox" data-suggestion-field="core_claim_zh" checked><span>核心观点</span><strong>{{ suggestion.core_claim_zh }}</strong><input type="hidden" data-suggestion-value value="{{ suggestion.core_claim_zh }}"></label>{% endif %}
+  </div>
+  {% if suggestion.evidence_json %}<ul>{% for item in suggestion.evidence_json|from_json %}<li>{{ item }}</li>{% endfor %}</ul>{% endif %}
+  <button class="button secondary" type="button" data-apply-suggestion><i data-lucide="list-checks"></i>应用所选建议</button>
+  <small class="model-note">应用只填写当前表单，不保存审核，也不会勾选日期确认；主题结论与自动初筛保持一致。</small>
+</section>
+{% endif %}

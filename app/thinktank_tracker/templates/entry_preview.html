@@ -1,0 +1,11 @@
+{% extends "base.html" %}
+{% block title %}发现预览 · 智库研究追踪{% endblock %}
+{% block content %}
+<div class="page-header"><div><p class="eyebrow">DISCOVERY PREVIEW</p><h1>入口发现预览</h1></div><a class="button secondary" href="/sources"><i data-lucide="arrow-left"></i>返回来源</a></div>
+<section class="section-band"><dl class="evidence-list"><dt>入口</dt><dd>{{ entry.url }}</dd><dt>实际地址</dt><dd>{{ final_url or '未成功访问' }}</dd><dt>配置适配器</dt><dd>{{ entry.adapter_key }}</dd><dt>实际适配器</dt><dd>{{ effective_adapter_key }}</dd><dt>采集引擎</dt><dd>{{ collection_engine }}</dd><dt>下一页</dt><dd class="break-all">{{ next_page_url or '首个栏目页未提供有效下一页' }}</dd></dl>{% if warning %}<div class="alert warning preview-warning"><i data-lucide="triangle-alert"></i><span>{{ warning }}</span></div>{% endif %}</section>
+<section class="section-band"><div class="section-heading"><div><h2>首个栏目页识别结果</h2><p>识别 {{ discovered_count }} 条，接收 {{ accepted_count }} 条。预览不会创建任务或调用模型。</p></div></div>
+  <div class="table-wrap"><table><thead><tr><th>判定</th><th>标题</th><th>作者</th><th>卡片日期</th><th>体裁 / 证据</th><th>理由 / URL</th></tr></thead><tbody>
+  {% for row in rows %}<tr><td><span class="status status-{{ 'approved' if row.accepted else 'rejected' }}">{{ '接收' if row.accepted else '拒绝' }}</span></td><td>{{ row.card.title }}</td><td>{{ row.card.authors|join('、') if row.card.authors else '待详情页确认' }}{% if row.card.author_evidence %}<small>{{ row.card.author_evidence }}</small>{% endif %}</td><td>{{ row.card.published_date or '待详情页确认' }}</td><td>{{ row.card.content_type or '待确认' }}{% if row.card.content_type_evidence %}<small>{{ row.card.content_type_evidence }}</small>{% endif %}</td><td>{{ row.reason }}<small class="break-all"><a href="{{ row.card.fetch_url }}" target="_blank" rel="noreferrer">{{ row.card.fetch_url }}</a></small></td></tr>{% else %}<tr><td colspan="6" class="empty-state">没有可展示的文章卡片</td></tr>{% endfor %}
+  </tbody></table></div>
+</section>
+{% endblock %}

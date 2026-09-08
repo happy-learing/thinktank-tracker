@@ -4,10 +4,10 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}智库研究追踪{% endblock %}</title>
-  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', path='app.css') }}?v={{ app_version }}">
   <script defer src="{{ url_for('static', path='vendor/htmx.min.js') }}"></script>
   <script defer src="{{ url_for('static', path='vendor/lucide.min.js') }}"></script>
-  <script defer src="{{ url_for('static', path='app.js') }}"></script>
+  <script defer src="{{ url_for('static', path='app.js') }}?v={{ app_version }}"></script>
 </head>
 <body>
   <header class="topbar">
@@ -24,6 +24,7 @@
       <a href="/#runs" class="nav-item {% if page == 'runs' %}active{% endif %}"><i data-lucide="radar"></i><span>检索任务</span></a>
       <a href="/review" class="nav-item {% if page == 'review' %}active{% endif %}"><i data-lucide="clipboard-check"></i><span>人工复核</span></a>
       <div class="nav-spacer"></div>
+      <a href="/trash" class="nav-item {% if page == 'trash' %}active{% endif %}"><i data-lucide="archive-restore"></i><span>回收站</span></a>
       <a href="/diagnostics" class="nav-item {% if page == 'diagnostics' %}active{% endif %}"><i data-lucide="activity"></i><span>环境诊断</span></a>
       <a href="/settings" class="nav-item {% if page == 'settings' %}active{% endif %}"><i data-lucide="settings"></i><span>设置</span></a>
     </nav>
