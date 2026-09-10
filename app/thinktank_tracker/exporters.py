@@ -32,6 +32,7 @@ from .models import (
     SourceRun,
 )
 from .paths import PATHS
+from .selection import fact_issues, run_policy
 
 
 NAVY = "1F4E79"
@@ -400,6 +401,84 @@ def export_report(session: Session, run_id: int) -> Path:
     return path
 
 
+def draft_issues(candidate: Candidate, run: CrawlRun) -> list[str]:
+    issues = fact_issues(candidate, run.start_date, run.end_date, run_policy(run))
+    if not _json_string_list(candidate.authors_json):
+        issues.append("作者待核实")
+    if not candidate.title_en.strip() or not candidate.title_zh.strip():
+        issues.append("双语标题待补齐")
+    try:
+        audit = json.loads(candidate.metadata_json or "{}").get("selection", {})
+    except (ValueError, AttributeError):
+        audit = {}
+    if not (audit.get("evidence_verified") and audit.get("input_complete")
+            and audit.get("verification_status") == "supported"
+            and audit.get("research_substance") == "substantive"):
+        issues.append("全文分析及证据复核未通过")
+    if not candidate.assessment or candidate.assessment.decision != "include":
+        issues.append("尚无纳入结论")
+    if candidate.review is not None:
+        issues.append("存在人工处理记录，草稿遵循人工结果")
+    return list(dict.fromkeys(issues))
+
+
+def export_draft_report(session: Session, run_id: int) -> Path:
+    run = session.get(CrawlRun, run_id)
+    if not run or run.deleted_at is not None:
+        raise ValueError("检索任务不存在")
+    rows = list(session.scalars(select(Candidate).where(Candidate.run_id == run_id)
+        .options(selectinload(Candidate.source), selectinload(Candidate.review), selectinload(Candidate.assessment))
+        .order_by(Candidate.id)).all())
+    sources = list(session.scalars(select(SourceRun).where(SourceRun.run_id == run_id)
+        .options(selectinload(SourceRun.source)).order_by(SourceRun.id)).all())
+    names = {r.source_id: r.source_name_snapshot or r.source.name for r in sources}
+    order = {r.source_id: i for i, r in enumerate(sources)}
+    groups = {}
+    exceptions = []
+    approved = automatic = 0
+    for row in rows:
+        if row.status in {CandidateStatus.REJECTED, CandidateStatus.HARD_EXCLUDED, CandidateStatus.MODEL_EXCLUDED}:
+            continue
+        if row.status == CandidateStatus.APPROVED:
+            problems = _report_candidate_errors([row], run).get(row.id, [])
+            fields = row.review
+        else:
+            problems = draft_issues(row, run)
+            fields = row
+        if problems:
+            exceptions.append((row, problems))
+            continue
+        groups.setdefault(row.source_id, []).append(ReportArticle(
+            authors=tuple(_json_string_list(fields.authors_json)), title_en=fields.title_en,
+            title_zh=fields.title_zh, published_date=row.published_date, url=row.original_url))
+        approved += row.status == CandidateStatus.APPROVED
+        automatic += row.status != CandidateStatus.APPROVED
+    doc = build_weekly_report_document(run.start_date, run.end_date, [
+        (names.get(source_id, "来源待核实"), sorted(articles,key=lambda a:(a.published_date,a.title_en)))
+        for source_id, articles in sorted(groups.items(),key=lambda item:(order.get(item[0],len(order)),item[0]))])
+    title = doc.paragraphs[0]
+    title.add_run(" — 自动草稿")
+    note = title.insert_paragraph_before(
+        f"任务 #{run.id} · 自动筛选 {automatic} 条 · 人工批准 {approved} 条 · 待处理 {len(exceptions)} 条。"
+        "自动条目通过程序核验与模型复核，尚未经人工逐篇批准。")
+    _set_run_font(note.runs[0], size=9)
+    coverage = "；".join(f"{r.source_name_snapshot or r.source.name}: {r.status}（{r.stop_reason or '尚未结束'}）" for r in sources)
+    cover_note = title.insert_paragraph_before("来源覆盖：" + (coverage or "未记录，不能确认完整性"))
+    _set_run_font(cover_note.runs[0], size=9)
+    doc.core_properties.title = f"任务 {run.id} 自动草稿"
+    if not automatic and not approved:
+        doc.add_paragraph("当前没有满足导出条件的条目。请查看下方待处理内容和来源覆盖，不能据此断言没有符合要求的研究。")
+    if exceptions:
+        doc.add_heading("待处理条目", level=1)
+        for row, problems in exceptions:
+            doc.add_paragraph(f"候选 {row.id}：{row.title_original}\n" + "；".join(problems))
+            _add_hyperlink(doc.add_paragraph(), row.original_url, row.original_url)
+    PATHS.exports.mkdir(parents=True,exist_ok=True)
+    path = PATHS.exports / f"草稿-任务{run.id}-{datetime.now():%Y%m%d-%H%M%S-%f}.docx"
+    doc.save(path)
+    return path
+
+
 def _sheet(ws, headers: list[str], rows: list[list[object]]) -> None:
     ws.append(headers)
     for row in rows:
@@ -752,6 +831,23 @@ def export_audit_workbook(session: Session, run_id: int) -> Path:
             for item in date_assists
         ],
     )
+    selection_rows = []
+    for item in candidates:
+        try:
+            audit = json.loads(item.metadata_json or "{}").get("selection", {})
+        except (ValueError, AttributeError):
+            audit = {}
+        selection_rows.append([
+            item.id, item.title_original, audit.get("policy", {}).get("mode", "历史未记录"),
+            audit.get("research_substance", ""), audit.get("input_complete", False),
+            audit.get("evidence_verified", False), audit.get("verification_status", "未记录"),
+            audit.get("verification_reason", ""), audit.get("model_calls", ""),
+            audit.get("input_chars", ""), audit.get("input_sha256", ""),
+            "；".join(audit.get("fact_issues", [])),
+        ])
+    _sheet(wb.create_sheet("研究判定核验"),
+        ["候选ID", "文章", "任务模式", "实质分析", "全文覆盖", "引文回查", "复核结果",
+         "复核理由", "逻辑调用次数", "最终输入字符", "最终输入哈希", "未满足条件"], selection_rows)
     for ws in wb.worksheets:
         ws.sheet_view.showGridLines = False
     PATHS.exports.mkdir(parents=True, exist_ok=True)

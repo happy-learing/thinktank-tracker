@@ -21,7 +21,8 @@
     <div class="button-group">
       <a class="button secondary" href="/settings?return_run_id={{ run.id }}"><i data-lucide="list-filter"></i>体裁规则</a>
       <form method="post" action="/runs/{{ run.id }}/content-types/reclassify"><button class="button secondary" type="submit"><i data-lucide="refresh-cw"></i>按现有规则重算本任务</button></form>
-      <form method="post" action="/runs/{{ run.id }}/export/report"><button class="button secondary" type="submit"><i data-lucide="file-text"></i>Word 报告</button></form>
+      <form method="post" action="/runs/{{ run.id }}/export/draft"><button class="button primary" type="submit"><i data-lucide="file-text"></i>自动 Word 草稿</button></form>
+      <form method="post" action="/runs/{{ run.id }}/export/report"><button class="button secondary" type="submit"><i data-lucide="file-text"></i>人工批准报告</button></form>
       <form method="post" action="/runs/{{ run.id }}/export/audit"><button class="button secondary" type="submit"><i data-lucide="sheet"></i>Excel 审计</button></form>
       {% if run.status in ['queued', 'interrupted', 'failed'] %}<form method="post" action="/runs/{{ run.id }}/resume"><button class="button primary" type="submit"><i data-lucide="rotate-cw"></i>恢复任务</button></form>{% endif %}
       {% if run.status not in ['queued','running'] %}<form method="post" action="/runs/{{ run.id }}/delete" data-confirm="将任务 #{{ run.id }} 移入回收站？"><button class="button danger" type="submit"><i data-lucide="trash-2"></i>删除任务</button></form>{% endif %}
@@ -54,7 +55,7 @@
   <section class="section-band compact content-filter-band">
     <div><strong>内容筛选</strong><small>筛选只改变显示，不删除记录，也不改变导出审计。</small></div>
     <form class="filter-form" method="get"><select name="content_filter" onchange="this.form.submit()">
-      {% for value,label in [('all','全部'),('hard_eligible','符合硬条件'),('type_excluded','明确不符合体裁'),('length_below','篇幅不足'),('model_included','模型建议纳入'),('model_excluded','模型建议排除'),('waiting_review','等待人工处理'),('reviewed','已批准或已拒绝')] %}<option value="{{ value }}" {% if content_filter == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
+      {% for value,label in [('all','全部'),('draft_ready','自动草稿就绪'),('exceptions','异常待处理'),('hard_eligible','符合硬条件'),('type_excluded','明确不符合体裁'),('length_below','篇幅不足'),('model_included','模型建议纳入'),('model_excluded','模型建议排除'),('waiting_review','等待人工处理'),('reviewed','已批准或已拒绝')] %}<option value="{{ value }}" {% if content_filter == value %}selected{% endif %}>{{ label }}</option>{% endfor %}
     </select></form>
   </section>
 

@@ -11,7 +11,7 @@ from thinktank_tracker.crawler import DiscoveredLink, FetchError, FetchedResourc
 from thinktank_tracker.extractors import DiscoveredAttachment, ExtractedDocument
 
 
-def test_zero_candidate_listing_is_incomplete(monkeypatch) -> None:
+def test_zero_candidate_listing_is_incomplete(monkeypatch, tmp_path) -> None:
     crawler = WebCrawler(AppConfig(per_domain_delay_seconds=0))
     monkeypatch.setattr(
         crawler,
@@ -23,6 +23,8 @@ def test_zero_candidate_listing_is_incomplete(monkeypatch) -> None:
             cache_path=Path("empty.html"),
         ),
     )
+    monkeypatch.setattr(crawler, "_render_with_playwright", lambda url: b"<html><main>Empty list</main></html>")
+    monkeypatch.setattr(crawler, "_cache_file", lambda url, suffix: tmp_path / "empty.html")
     try:
         result = crawler.scan_listing(
             "https://example.org/publications/",

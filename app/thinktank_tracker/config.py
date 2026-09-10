@@ -54,6 +54,10 @@ class AppConfig:
     api_style: str = "chat_completions"
     request_timeout_seconds: int = 120
     max_model_input_chars: int = 20_000
+    selection_mode: str = "strict"
+    min_english_words: int = 1500
+    min_chinese_chars: int = 3000
+    max_model_chunks: int = 12
     crawl_concurrency: int = 3
     per_domain_delay_seconds: float = 2.0
     max_listing_pages: int = 25

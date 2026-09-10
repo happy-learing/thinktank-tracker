@@ -4,7 +4,7 @@ from pathlib import Path
 
 import thinktank_tracker.link_test_service as link_tests
 from thinktank_tracker.config import AppConfig
-from thinktank_tracker.crawler import FetchAttempt, FetchError, FetchedResource
+from thinktank_tracker.crawler import FetchAttempt, FetchError, FetchedResource, WebCrawler
 from thinktank_tracker.link_test_service import EntryTestSnapshot
 
 
@@ -21,11 +21,11 @@ def _snapshot(entry_id: int, url: str) -> EntryTestSnapshot:
 
 
 def test_entry_link_test_distinguishes_success_warning_and_failure(monkeypatch, tmp_path) -> None:
-    class FakeCrawler:
+    class FakeCrawler(WebCrawler):
         browser_fallbacks: list[str] = []
 
         def __init__(self, _config, _limiter):
-            pass
+            self.config = _config
 
         def fetch(self, url):
             if url.endswith("/failed"):
@@ -53,6 +53,12 @@ def test_entry_link_test_distinguishes_success_warning_and_failure(monkeypatch, 
             if "render-failed" in url:
                 raise RuntimeError("browser process exited")
             return b"<html><main>No publication cards after rendering</main></html>"
+
+        def _render_with_scrapling(self, url):
+            raise RuntimeError("browser process exited")
+
+        def _cache_file(self, url, suffix):
+            return tmp_path / "rendered.html"
 
         def close(self):
             pass

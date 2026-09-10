@@ -114,6 +114,8 @@ class SourceEntry(Base):
 class CrawlRun(Base):
     __tablename__ = "crawl_runs"
 
+    selection_policy_json: Mapped[str] = mapped_column(Text, default="{}")
+
     id: Mapped[int] = mapped_column(primary_key=True)
     configuration_id: Mapped[int | None] = mapped_column(
         ForeignKey("source_configurations.id", ondelete="RESTRICT"), nullable=True

@@ -91,30 +91,12 @@ def _test_one(
             snapshot.content_type_selectors,
             adapter.listing_content_type_selectors if adapter else (),
         )
-        cards = discover_content_cards(
-            resource.body,
-            resource.url,
-            selectors,
-            snapshot.date_selectors,
-            config.content_type_rules,
-            containers,
-            type_selectors,
+        resource, cards = crawler.listing_cards(
+            resource, selectors, snapshot.date_selectors, containers, type_selectors,
             adapter.listing_author_selectors if adapter else (),
         )
-        if not cards and not resource.rendered:
-            rendered_body = crawler._render_with_playwright(resource.url)
-            tested_body = rendered_body
-            rendered_used = True
-            cards = discover_content_cards(
-                rendered_body,
-                resource.url,
-                selectors,
-                snapshot.date_selectors,
-                config.content_type_rules,
-                containers,
-                type_selectors,
-                adapter.listing_author_selectors if adapter else (),
-            )
+        tested_body = resource.body
+        rendered_used = resource.rendered
         accepted = 0
         rejected_links: list[tuple[str, str]] = []
         for card in cards:

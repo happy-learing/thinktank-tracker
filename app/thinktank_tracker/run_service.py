@@ -11,7 +11,7 @@ from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import selectinload
 
-from .config import load_config
+from .config import AppConfig, load_config
 from .configuration_service import ensure_default_configuration, get_active_configuration
 from .constants import (
     ALLOWED_DEEP_TYPES,
@@ -37,6 +37,7 @@ from .crawler import (
 from .database import SessionLocal, session_scope
 from .extractors import ExtractedDocument, parse_date_value
 from .llm import OpenAICompatibleProvider
+from .selection import extraction_gate, fact_issues, policy_snapshot, run_policy
 from .models import (
     Assessment,
     Candidate,
@@ -107,6 +108,7 @@ def create_run(
         if not active:
             raise ValueError(f"配置“{configuration.name}”中没有可用的智库检索入口")
         run = CrawlRun(
+            selection_policy_json=json.dumps(policy_snapshot(load_config()), ensure_ascii=False),
             configuration_id=configuration.id,
             configuration_name_snapshot=configuration.name,
             start_date=start_date,
@@ -170,66 +172,10 @@ def _hard_filter(
     allowed_content_types: tuple[str, ...] | frozenset[str] = ALLOWED_DEEP_TYPES,
     excluded_content_types: tuple[str, ...] | frozenset[str] = frozenset(EXCLUDED_TYPES),
 ) -> tuple[str, str]:
-    candidate.topic_status = TopicStatus.PENDING
-    candidate.review_status = candidate.review_status or ReviewStatus.PENDING
-    if candidate.date_status != "confirmed" or candidate.published_date is None:
-        candidate.date_scope = DateScope.DATE_UNKNOWN
-        candidate.content_kind_status = ContentKindStatus.NEEDS_REVIEW
-        candidate.length_status = LengthStatus.UNKNOWN
-        candidate.topic_status = TopicStatus.NEEDS_REVIEW
-        return CandidateStatus.NEEDS_REVIEW, "发布日期缺失、冲突或仅来自 PDF 文件元数据"
-    if candidate.published_date < start_date:
-        candidate.date_scope = DateScope.BEFORE_START
-        candidate.topic_status = TopicStatus.NOT_REQUIRED
-        candidate.extraction_status = (
-            "metadata_only" if candidate.extraction_status in {"pending", "metadata_only"} else candidate.extraction_status
-        )
-        return CandidateStatus.HARD_EXCLUDED, "发布日期不在指定闭区间"
-    if candidate.published_date > end_date:
-        candidate.date_scope = DateScope.AFTER_END
-        candidate.topic_status = TopicStatus.NOT_REQUIRED
-        candidate.extraction_status = (
-            "metadata_only" if candidate.extraction_status in {"pending", "metadata_only"} else candidate.extraction_status
-        )
-        return CandidateStatus.HARD_EXCLUDED, "发布日期不在指定闭区间"
-    candidate.date_scope = DateScope.IN_WINDOW
-    if candidate.extraction_status != "complete":
-        candidate.length_status = LengthStatus.UNKNOWN
-        candidate.topic_status = TopicStatus.NEEDS_REVIEW
-        return CandidateStatus.NEEDS_REVIEW, "正文提取不完整、失败或疑似扫描 PDF"
-    if candidate.content_type in excluded_content_types:
-        candidate.content_kind_status = ContentKindStatus.EXCLUDED
-        candidate.topic_status = TopicStatus.NOT_REQUIRED
-        return CandidateStatus.HARD_EXCLUDED, f"明确排除的体裁: {candidate.content_type}"
-    if "体裁冲突" in (candidate.content_type_evidence or ""):
-        candidate.content_kind_status = ContentKindStatus.NEEDS_REVIEW
-        candidate.topic_status = TopicStatus.NEEDS_REVIEW
-        return CandidateStatus.NEEDS_REVIEW, candidate.content_type_evidence
-    if candidate.language == "zh":
-        count, threshold = candidate.chinese_char_count, 3000
-    else:
-        count, threshold = candidate.english_word_count, 1500
-    if count < threshold:
-        if count >= threshold * 0.8:
-            candidate.length_status = LengthStatus.BORDERLINE
-        else:
-            candidate.length_status = LengthStatus.BELOW
-            candidate.topic_status = TopicStatus.NOT_REQUIRED
-            return CandidateStatus.HARD_EXCLUDED, f"篇幅低于门槛: {count}/{threshold}"
-    else:
-        candidate.length_status = LengthStatus.PASS
-    if candidate.content_type == "unknown":
-        candidate.content_kind_status = ContentKindStatus.NEEDS_REVIEW
-        candidate.topic_status = TopicStatus.NEEDS_REVIEW
-        return CandidateStatus.NEEDS_REVIEW, "无法确定体裁"
-    if candidate.content_type not in allowed_content_types:
-        candidate.content_kind_status = ContentKindStatus.NEEDS_REVIEW
-        candidate.topic_status = TopicStatus.NOT_REQUIRED
-        return CandidateStatus.NEEDS_REVIEW, f"体裁需要人工确认: {candidate.content_type}"
-    candidate.content_kind_status = ContentKindStatus.ELIGIBLE
-    return CandidateStatus.DISCOVERED, (
-        f"篇幅处于临界区间: {count}/{threshold}" if candidate.length_status == LengthStatus.BORDERLINE else ""
-    )
+    policy = policy_snapshot(AppConfig())
+    policy["allowed_types"] = list(allowed_content_types)
+    policy["excluded_types"] = list(excluded_content_types)
+    return extraction_gate(candidate, start_date, end_date, policy)
 
 
 def _resolve_candidate_date(
@@ -283,6 +229,14 @@ def _resolve_candidate_content_type(
 
 def reclassify_run_content_types(session, run_id: int, rules) -> int:
     """Re-evaluate one task from saved deterministic evidence without networking."""
+    run = session.get(CrawlRun, run_id)
+    if run is None:
+        return 0
+    policy = run_policy(run)
+    refreshed = policy_snapshot(AppConfig(content_type_rules=rules))
+    for key in ("allowed_types", "excluded_types", "content_type_rules"):
+        policy[key] = refreshed[key]
+    run.selection_policy_json = json.dumps(policy, ensure_ascii=False)
     candidates = session.scalars(
         select(Candidate)
         .where(Candidate.run_id == run_id)
@@ -401,39 +355,24 @@ def reclassify_run_content_types(session, run_id: int, rules) -> int:
             structured_items, ensure_ascii=False
         )
 
-        type_reason = (candidate.hard_filter_reason or "").startswith(
-            ("明确排除的体裁", "体裁需要人工确认", "无法确定体裁", "体裁冲突")
-        )
-        if candidate.date_scope == DateScope.IN_WINDOW and candidate.length_status != LengthStatus.BELOW:
-            if resolved_type == "unknown" or action == "review" or "体裁冲突" in evidence:
-                candidate.content_kind_status = ContentKindStatus.NEEDS_REVIEW
-                if candidate.assessment is None:
-                    candidate.topic_status = TopicStatus.NEEDS_REVIEW
-                if type_reason or candidate.status in {
-                    CandidateStatus.DISCOVERED,
-                    CandidateStatus.HARD_EXCLUDED,
-                }:
-                    candidate.status = CandidateStatus.NEEDS_REVIEW
-                    candidate.hard_filter_reason = evidence or "体裁需要人工确认"
-            elif action == "exclude":
-                candidate.content_kind_status = ContentKindStatus.EXCLUDED
-                candidate.topic_status = TopicStatus.NOT_REQUIRED
-                candidate.status = CandidateStatus.HARD_EXCLUDED
-                candidate.hard_filter_reason = f"明确排除的体裁: {resolved_type}"
+        previous_topic = candidate.topic_status
+        next_status, reason = extraction_gate(candidate, run.start_date, run.end_date, policy)
+        candidate.topic_status = previous_topic
+        candidate.hard_filter_reason = reason
+        if next_status == CandidateStatus.HARD_EXCLUDED:
+            candidate.status = next_status
+        elif candidate.assessment is not None:
+            audit = json.loads(candidate.metadata_json or "{}").get("selection", {})
+            verified = audit.get("evidence_verified") and audit.get("input_complete") and audit.get("verification_status") == "supported"
+            if verified and previous_topic == TopicStatus.MODEL_INCLUDED:
+                candidate.status = CandidateStatus.MODEL_INCLUDED if not reason else CandidateStatus.NEEDS_REVIEW
+            elif verified and previous_topic == TopicStatus.MODEL_EXCLUDED:
+                candidate.status = CandidateStatus.MODEL_EXCLUDED
             else:
-                candidate.content_kind_status = ContentKindStatus.ELIGIBLE
-                if type_reason:
-                    candidate.hard_filter_reason = ""
-                    if candidate.assessment is not None:
-                        candidate.status = (
-                            CandidateStatus.MODEL_INCLUDED
-                            if candidate.assessment.decision == Decision.INCLUDE
-                            else CandidateStatus.MODEL_EXCLUDED
-                            if candidate.assessment.decision == Decision.EXCLUDE
-                            else CandidateStatus.NEEDS_REVIEW
-                        )
-                    else:
-                        candidate.status = CandidateStatus.DISCOVERED
+                candidate.status = CandidateStatus.NEEDS_REVIEW
+                candidate.hard_filter_reason = "；".join(filter(None, [reason, "旧判断需按新证据流程重新核验"]))
+        else:
+            candidate.status = next_status
         if before != (candidate.content_type, candidate.content_type_evidence):
             changed += 1
     return changed
@@ -540,7 +479,7 @@ def _persist_candidate(
         )
         if existing:
             _add_discovery(session, existing.id, source_entry_id, link)
-            if existing.extraction_status not in {"pending"}:
+            if existing.review is not None or existing.extraction_status not in {"pending", "failed"}:
                 return
             candidate = existing
         else:
@@ -594,60 +533,10 @@ def _persist_candidate(
         )
         run_start = run.start_date
         run_end = run.end_date
+        selection_policy = run_policy(run)
         _add_discovery(session, candidate_id, source_entry_id, link)
 
         if link.date_scope in {DateScope.BEFORE_START, DateScope.AFTER_END}:
-            candidate.status, candidate.hard_filter_reason = _hard_filter(
-                candidate,
-                run.start_date,
-                run.end_date,
-                allowed_content_types,
-                excluded_content_types,
-            )
-            return
-        if link.date_scope == DateScope.DATE_UNKNOWN:
-            document = link.preflight_document
-            if document:
-                candidate.title_original = document.title or candidate.title_original
-                candidate.content_type, candidate.content_type_evidence = (
-                    _resolve_candidate_content_type(document, link)
-                )
-                candidate.content_type_raw_labels_json = json.dumps(
-                    list(dict.fromkeys([
-                        *link.listing_content_type_labels,
-                        *document.content_type_labels,
-                    ])),
-                    ensure_ascii=False,
-                )
-                candidate.content_type_evidence_json = json.dumps(
-                    [
-                        item.to_dict()
-                        for item in (
-                            *link.listing_content_type_evidence_items,
-                            *document.content_type_evidence_items,
-                        )
-                    ],
-                    ensure_ascii=False,
-                )
-                authors, author_evidence = _resolve_candidate_authors(document, link)
-                candidate.authors_json = json.dumps(authors, ensure_ascii=False)
-                candidate.author_evidence = author_evidence
-                candidate.language = document.language
-                candidate.english_word_count = document.english_word_count
-                candidate.chinese_char_count = document.chinese_char_count
-                candidate.extracted_text = document.text
-                candidate.content_hash = document.content_hash
-                candidate.metadata_json = json.dumps(
-                    {
-                        "preflight_error": link.preflight_error,
-                        "abstract": document.abstract,
-                        "tags": document.tags,
-                        "headings": document.headings,
-                    },
-                    ensure_ascii=False,
-                )
-                candidate.cache_path = str(link.preflight_resource.cache_path) if link.preflight_resource else ""
-                candidate.extraction_status = "partial"
             candidate.status, candidate.hard_filter_reason = _hard_filter(
                 candidate,
                 run.start_date,
@@ -747,12 +636,8 @@ def _persist_candidate(
             ensure_ascii=False,
         )
         candidate.cache_path = str(resource.cache_path)
-        candidate.status, candidate.hard_filter_reason = _hard_filter(
-            candidate,
-            run_start,
-            run_end,
-            allowed_content_types,
-            excluded_content_types,
+        candidate.status, candidate.hard_filter_reason = extraction_gate(
+            candidate, run_start, run_end, selection_policy,
         )
         if document.warnings:
             candidate.hard_filter_reason = "; ".join(
@@ -766,6 +651,38 @@ def _persist_candidate(
         extracted_text = candidate.extracted_text
         model_metadata = json.loads(candidate.metadata_json or "{}")
 
+    assess_stored_candidate(candidate_id)
+
+
+def _assessment_record(candidate, **fields):
+    record = candidate.assessment or Assessment(candidate_id=candidate.id)
+    for key, value in fields.items():
+        setattr(record, key, value)
+    candidate.assessment = record
+    return record
+
+
+def assess_stored_candidate(candidate_id: int) -> None:
+    """Retry content reasoning using the stored body; never overwrite a human decision."""
+    with session_scope() as session:
+        candidate = session.get(Candidate, candidate_id)
+        if candidate is None or candidate.review is not None:
+            return
+        run = candidate.run
+        selection_policy = run_policy(run)
+        run_start, run_end = run.start_date, run.end_date
+        candidate_status, reason = extraction_gate(candidate, run_start, run_end, selection_policy)
+        candidate.status, candidate.hard_filter_reason = candidate_status, reason
+        source_name = next((r.source_name_snapshot for r in run.source_runs if r.source_id == candidate.source_id), candidate.source.name)
+        title_original, content_type, extracted_text = candidate.title_original, candidate.content_type, candidate.extracted_text
+        model_metadata = json.loads(candidate.metadata_json or "{}")
+        if candidate.assessment:
+            history = model_metadata.setdefault("assessment_history", [])
+            history.append({"raw_response": candidate.assessment.raw_response,
+                            "provider": candidate.assessment.provider_model,
+                            "selection": model_metadata.get("selection", {})})
+        model_metadata.pop("selection", None)
+        candidate.metadata_json = json.dumps(model_metadata, ensure_ascii=False)
     if candidate_status != CandidateStatus.DISCOVERED:
         return
     provider = OpenAICompatibleProvider(load_config())
@@ -774,7 +691,7 @@ def _persist_candidate(
             candidate = session.get(Candidate, candidate_id)
             if candidate:
                 candidate.status = CandidateStatus.NEEDS_REVIEW
-                candidate.hard_filter_reason = "模型未配置，确定性硬过滤已通过"
+                candidate.hard_filter_reason = "；".join(filter(None, [candidate.hard_filter_reason, "模型未配置，正文已准备好"]))
                 candidate.topic_status = TopicStatus.PENDING
         return
     result = provider.assess(
@@ -786,20 +703,21 @@ def _persist_candidate(
     )
     with session_scope() as session:
         candidate = session.get(Candidate, candidate_id)
-        if not candidate:
+        if not candidate or candidate.review is not None:
             return
         if not result.payload:
             candidate.status = CandidateStatus.NEEDS_REVIEW
             candidate.hard_filter_reason = result.error
             candidate.topic_status = TopicStatus.NEEDS_REVIEW
             session.add(
-                Assessment(
-                    candidate_id=candidate.id,
+                _assessment_record(candidate,
                     decision=Decision.NEEDS_REVIEW,
                     provider_model=provider.config.model_name,
-                    input_chars=min(len(extracted_text), provider.config.max_model_input_chars),
+                    input_chars=len(result.evidence_text),
                     raw_response=result.raw_response,
                     error_message=result.error,
+                    primary_category="", secondary_categories_json="[]", core_claim_zh="",
+                    reasoning_zh="", evidence_json="[]", confidence=0, strategic_nexus="", exclusion_code="",
                 )
             )
             return
@@ -807,27 +725,49 @@ def _persist_candidate(
         candidate.title_en = payload.title_en
         candidate.title_zh = payload.title_zh
         normalized_text = " ".join(extracted_text.split())
-        evidence_verified = bool(payload.evidence) and all(
+        actual_input = " ".join(result.evidence_text.split())
+        evidence_verified = bool(payload.evidence) and bool(actual_input) and all(
             bool(item.strip()) and " ".join(item.split()) in normalized_text
-            for item in payload.evidence
+            and " ".join(item.split()) in actual_input for item in payload.evidence
         )
+        blocking = fact_issues(candidate, run_start, run_end, selection_policy)
+        if payload.decision == Decision.INCLUDE:
+            if not json.loads(candidate.authors_json or "[]"):
+                blocking.append("作者待核实")
+            if not payload.title_en.strip() or not payload.title_zh.strip():
+                blocking.append("双语标题待补齐")
+        audit = json.loads(candidate.metadata_json or "{}")
+        audit["selection"] = {
+            "policy": selection_policy, "evidence_verified": evidence_verified,
+            "verification_status": result.verification_status,
+            "verification_reason": result.verification_reason,
+            "input_complete": result.input_complete, "model_calls": result.request_count,
+            "input_chars": len(result.evidence_text), "input_sha256": hashlib.sha256(result.evidence_text.encode("utf-8")).hexdigest(),
+            "segments": result.segment_audit, "fact_issues": blocking,
+            "research_substance": payload.research_substance,
+        }
         if not evidence_verified:
             candidate.status = CandidateStatus.NEEDS_REVIEW
             candidate.topic_status = TopicStatus.NEEDS_REVIEW
-            candidate.hard_filter_reason = "模型证据无法在提取正文中逐字回查"
-        elif payload.decision == Decision.EXCLUDE and payload.confidence >= 0.85:
+            blocking.append("模型证据无法在实际输入及提取正文中逐字回查")
+        elif not result.input_complete or result.verification_status != "supported":
+            candidate.status = CandidateStatus.NEEDS_REVIEW
+            candidate.topic_status = TopicStatus.NEEDS_REVIEW
+            blocking.append(result.verification_reason or "模型复核或全文覆盖尚未通过")
+        elif payload.decision == Decision.EXCLUDE:
             candidate.status = CandidateStatus.MODEL_EXCLUDED
             candidate.topic_status = TopicStatus.MODEL_EXCLUDED
-        elif payload.decision == Decision.INCLUDE and payload.confidence >= 0.75:
-            candidate.status = CandidateStatus.MODEL_INCLUDED
+        elif payload.decision == Decision.INCLUDE and payload.research_substance == "substantive":
+            candidate.status = CandidateStatus.NEEDS_REVIEW if blocking else CandidateStatus.MODEL_INCLUDED
             candidate.topic_status = TopicStatus.MODEL_INCLUDED
         else:
             candidate.status = CandidateStatus.NEEDS_REVIEW
             candidate.topic_status = TopicStatus.NEEDS_REVIEW
-            candidate.hard_filter_reason = "模型置信度不足，转人工复核"
+            blocking.append("研究深度或主题判断仍不明确")
+        candidate.hard_filter_reason = "；".join(blocking)
+        candidate.metadata_json = json.dumps(audit, ensure_ascii=False)
         session.add(
-            Assessment(
-                candidate_id=candidate.id,
+            _assessment_record(candidate,
                 decision=payload.decision,
                 primary_category=payload.primary_category or "",
                 secondary_categories_json=json.dumps(payload.secondary_categories),
@@ -836,10 +776,11 @@ def _persist_candidate(
                 evidence_json=json.dumps(payload.evidence, ensure_ascii=False),
                 confidence=payload.confidence,
                 provider_model=provider.config.model_name,
-                input_chars=min(len(extracted_text), provider.config.max_model_input_chars),
+                input_chars=len(result.evidence_text),
                 raw_response=result.raw_response,
                 strategic_nexus=payload.strategic_nexus,
                 exclusion_code=payload.exclusion_code,
+                error_message=result.error,
             )
         )
 
@@ -952,6 +893,7 @@ def _execute_source(
             source_run.started_at = utcnow()
             run = session.get(CrawlRun, run_id)
             source_id = source_run.source_id
+            config.content_type_rules = run_policy(run)["content_type_rules"]
             entry_run_ids = [row.id for row in source_run.entry_runs]
             if only_entry_run_ids is not None:
                 entry_run_ids = [row_id for row_id in entry_run_ids if row_id in only_entry_run_ids]
@@ -1182,7 +1124,12 @@ def execute_run(run_id: int) -> None:
             run = session.get(CrawlRun, run_id)
             statuses = {row.status for row in run.source_runs}
             run.completed_at = utcnow()
-            if CoverageStatus.FAILED in statuses or CoverageStatus.INCOMPLETE in statuses:
+            unresolved = session.scalar(select(func.count(Candidate.id)).where(
+                Candidate.run_id == run_id,
+                Candidate.status.in_([CandidateStatus.NEEDS_REVIEW, CandidateStatus.DISCOVERED]),
+            )) or 0
+            run.error_message = f"{unresolved} 条内容尚需处理，可先导出自动草稿查看已完成条目及异常" if unresolved else ""
+            if unresolved or CoverageStatus.FAILED in statuses or CoverageStatus.INCOMPLETE in statuses:
                 run.status = RunStatus.COMPLETED_WITH_ISSUES
             else:
                 run.status = RunStatus.COMPLETED

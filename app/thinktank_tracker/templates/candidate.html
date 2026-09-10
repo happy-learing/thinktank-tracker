@@ -3,6 +3,7 @@
 {% block content %}
 <div class="page-header">
   <div><p class="eyebrow">HUMAN REVIEW #{{ candidate.id }}</p><h1>{{ candidate.title_original or '标题待确认' }}</h1></div>
+  {% if not candidate.review and candidate.extracted_text %}<form method="post" action="/candidates/{{ candidate.id }}/reanalyze"><button class="button secondary" type="submit">重新分析已保存正文</button></form>{% endif %}
   <a class="button secondary" href="/runs/{{ candidate.run_id }}"><i data-lucide="arrow-left"></i>返回任务</a>
 </div>
 <div class="review-layout">
@@ -34,11 +35,14 @@
     {% if candidate.assessment %}
     {% set assessment_evidence = candidate.assessment.evidence_json|from_json %}
     <div class="model-assessment">
-      <h3>自动初筛模型结论</h3>
-      <p><span class="status status-{{ candidate.status }}">{{ candidate.assessment.decision }}</span> 置信度 {{ '%.0f'|format(candidate.assessment.confidence * 100) }}% · {{ candidate.assessment.reasoning_zh }}</p>
+      <h3>内容分析与证据复核</h3>
+      {% set selection = (candidate.metadata_json|from_json).get('selection', {}) %}
+      <p>全文覆盖：{{ '已完成' if selection.get('input_complete') else '未完成或旧版未记录' }} · 复核：{{ selection.get('verification_status', '未记录') }}</p>
+      <p>{{ selection.get('verification_reason', '') }}</p>
+      <p><span class="status status-{{ candidate.status }}">{{ candidate.assessment.decision }}</span> 模型自评分 {{ '%.2f'|format(candidate.assessment.confidence) }}（非准确率） · {{ candidate.assessment.reasoning_zh }}</p>
       {% if candidate.assessment.strategic_nexus %}<p><strong>战略关联：</strong>{{ candidate.assessment.strategic_nexus }}</p>{% endif %}
       {% if candidate.assessment.exclusion_code %}<p><strong>排除代码：</strong>{{ candidate.assessment.exclusion_code }}</p>{% endif %}
-      <p><strong>证据核验：</strong>{% if assessment_evidence and '证据无法' not in candidate.hard_filter_reason %}已逐字回查{% else %}未通过，需人工复核{% endif %}</p>
+      <p><strong>证据核验：</strong>{% if selection.get('evidence_verified') %}已逐字回查{% else %}未通过，需人工复核{% endif %}</p>
       {% if assessment_evidence %}<ul>{% for evidence in assessment_evidence %}<li>{{ evidence }}</li>{% endfor %}</ul>{% endif %}
       {% if candidate.assessment.error_message %}<p class="error-text">{{ candidate.assessment.error_message }}</p>{% endif %}
     </div>

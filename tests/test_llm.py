@@ -91,7 +91,7 @@ def test_assessment_complete_user_input_respects_configured_limit(monkeypatch) -
         metadata={"abstract": "A" * 4000, "tags": ["security"], "headings": ["Conclusion"]},
     )
 
-    assert result.payload is not None
+    assert result.payload is None  # Fixture quotes absent evidence; repair must not bypass the gate.
     user_message = FakeClient.calls[0][2]["messages"][1]["content"]
     assert len(user_message) <= 5000
     assert "[元数据已按输入上限截断]" in user_message

@@ -137,7 +137,7 @@ Copy-Item -LiteralPath (Join-Path $ProjectRoot "scripts\verify-package.ps1") -De
 $BuildInfo = [ordered]@{
     product = "ThinkTankTracker"
     version = $Version
-    database_schema = 10
+    database_schema = 11
     platform = "Windows x64"
     build_time = (Get-Date).ToUniversalTime().ToString("o")
     python = (& $PythonPath --version 2>&1).ToString()

@@ -16,7 +16,7 @@ from .url_utils import (
 )
 
 
-CURRENT_SCHEMA_VERSION = 10
+CURRENT_SCHEMA_VERSION = 11
 
 
 def _legacy_content_type_labels(evidence: str) -> list[str]:
@@ -744,3 +744,7 @@ def migrate(connection: Connection) -> None:
         current = 10
     if current <= 8:
         _add_columns(connection, "sources", {"deleted_at": "DATETIME"})
+
+    if current < 11:
+        _add_columns(connection, "crawl_runs", {"selection_policy_json": "TEXT NOT NULL DEFAULT '{}'"})
+        connection.exec_driver_sql("PRAGMA user_version=11")

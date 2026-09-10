@@ -14,7 +14,7 @@ from .constants import (
     Decision,
     ReviewStatus,
 )
-from .config import load_config
+from .selection import run_policy
 from .models import Candidate, ReviewDecision, utcnow
 
 
@@ -73,7 +73,7 @@ def save_review(
             missing.append("确认发布日期")
         elif not candidate.run.start_date <= proposed_date <= candidate.run.end_date:
             missing.append(
-                f"将发布日期改为任务区间 {candidate.run.start_date.isoformat()} 至 {candidate.run.end_date.isoformat()} 内"
+                f"真实发布日期不在任务区间 {candidate.run.start_date.isoformat()} 至 {candidate.run.end_date.isoformat()} 内；请排除或新建正确日期区间的任务"
             )
         if primary_category not in CATEGORY_LABELS:
             missing.append("选择主分类")
@@ -81,13 +81,14 @@ def save_review(
             missing.append("填写英文标题")
         if not title_zh.strip():
             missing.append("填写中文标题")
+        policy = run_policy(candidate.run)
         normalized_type = content_type.strip()
-        if not normalized_type or normalized_type.lower() == "unknown":
+        if policy["mode"] == "strict" and (not normalized_type or normalized_type.lower() == "unknown"):
             missing.append("选择或填写体裁")
         elif len(normalized_type) > 100:
             missing.append("将体裁缩短到 100 个字符以内")
-        elif normalized_type.lower() in (set(EXCLUDED_TYPES) | set(load_config().excluded_content_types)):
-            missing.append("将明确排除的体裁改为真实深度研究体裁")
+        elif policy["mode"] == "strict" and normalized_type.lower() in policy["excluded_types"]:
+            missing.append("当前体裁属于明确排除的体裁；请调整任务范围或排除此项，不应为通过审核而改写真实体裁")
         normalized_authors = _normalize_authors(authors)
         if not normalized_authors:
             missing.append("填写至少一位作者")
@@ -127,6 +128,7 @@ def save_review(
     review.core_claim_zh = core_claim_zh.strip()
     review.notes = notes.strip()
     review.reviewed_at = utcnow()
+    candidate.review = review
     session.add(review)
     candidate.title_en = review.title_en
     candidate.title_zh = review.title_zh

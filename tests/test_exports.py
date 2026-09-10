@@ -122,7 +122,7 @@ def test_docx_and_xlsx_exports_have_required_structure(db_session, tmp_path, mon
     workbook = load_workbook(xlsx_path, read_only=True)
     assert workbook.sheetnames == [
         "概览", "智库覆盖", "入口覆盖", "逐页发现审计", "无符合项智库", "日期待确认", "抓取失败",
-        "全部正式内容", "日期范围内完整清单", "范围外内容", "模型调用统计", "PDF附件", "人工触发模型建议", "模型日期辅助",
+        "全部正式内容", "日期范围内完整清单", "范围外内容", "模型调用统计", "PDF附件", "人工触发模型建议", "模型日期辅助", "研究判定核验",
     ]
     assert workbook["全部正式内容"].max_row == 2
     attachment_rows = list(workbook["PDF附件"].iter_rows(values_only=True))

@@ -157,7 +157,7 @@ def _temporary_paths(root: Path) -> AppPaths:
     )
 
 
-def test_initialize_database_backs_up_v6_before_v10_upgrade(tmp_path, monkeypatch) -> None:
+def test_initialize_database_backs_up_v6_before_v11_upgrade(tmp_path, monkeypatch) -> None:
     paths = _temporary_paths(tmp_path)
     paths.ensure()
     engine = create_engine(f"sqlite+pysqlite:///{paths.database.as_posix()}")
@@ -178,7 +178,7 @@ def test_initialize_database_backs_up_v6_before_v10_upgrade(tmp_path, monkeypatc
     monkeypatch.setattr(database, "engine", engine)
     database.initialize_database()
 
-    backups = list(paths.backups.glob("tracker_pre_v10_*.sqlite3"))
+    backups = list(paths.backups.glob("tracker_pre_v11_*.sqlite3"))
     assert len(backups) == 1
     backup_engine = create_engine(f"sqlite+pysqlite:///{backups[0].as_posix()}")
     with backup_engine.connect() as connection:

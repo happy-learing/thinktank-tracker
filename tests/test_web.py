@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 import thinktank_tracker.web as web
+from thinktank_tracker import __version__
 from thinktank_tracker.config import AppConfig
 from thinktank_tracker.constants import (
     CandidateStatus,
@@ -45,7 +46,7 @@ def test_dashboard_and_static_assets_load() -> None:
         }
         assert client.get("/").status_code == 200
         assert "智库研究追踪" in client.get("/").text
-        assert "/static/app.css?v=0.6.1" in client.get("/").text
+        assert f"/static/app.css?v={__version__}" in client.get("/").text
         assert client.get("/sources").status_code == 200
         assert client.get("/static/app.css").status_code == 200
         assert client.get("/static/vendor/htmx.min.js").status_code == 200

@@ -33,7 +33,9 @@ from .url_utils import canonicalize_url, normalize_fetch_url
 from .url_utils import ContentTypeEvidence, collect_content_type_evidence, resolve_content_type
 
 
-USER_AGENT = "ThinkTankTracker/0.6.1 (+local research audit tool)"
+from . import __version__
+
+USER_AGENT = f"ThinkTankTracker/{__version__} (+local research audit tool)"
 BOUNDARY_VALIDATION_ITEMS = 10
 
 
@@ -347,7 +349,8 @@ class WebCrawler:
                         "{get: () => undefined});"
                     )
                     page = context.new_page()
-                    page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+                    navigation = page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+                    self._render_status = navigation.status if navigation else None
 
                     deadline = time.monotonic() + 20
                     body = b""
@@ -368,9 +371,67 @@ class WebCrawler:
                         pass
                     page.wait_for_timeout(2_000)
                     body = page.content().encode("utf-8")
+                    self._render_url = page.url
+                    if self._render_status and self._render_status >= 400:
+                        raise RuntimeError(f"浏览器返回 HTTP {self._render_status}")
                 finally:
                     browser.close()
         return body
+
+    def _render_with_scrapling(self, url: str) -> tuple[bytes, str, int]:
+        from scrapling.fetchers import StealthyFetcher
+
+        executable = bundled_chromium_executable(PATHS.root / "runtime" / "browsers")
+        options = {"executable_path": str(executable)} if executable else {}
+        with _BROWSER_SEMAPHORE, self.limiter.slot(url):
+            response = StealthyFetcher.fetch(
+                url, headless=True, timeout=45_000, retries=1,
+                solve_cloudflare=True, wait=1500, **options,
+            )
+        return bytes(response.body), str(response.url), int(response.status)
+
+    def render_resource(
+        self, url: str, attempts: list[FetchAttempt] | None = None, *, stealth_first: bool = False,
+    ) -> FetchedResource:
+        """One bounded rendering path shared by live scans and link diagnostics."""
+        audit = list(attempts or [])
+        engines = ("scrapling",) if stealth_first else ("playwright", "scrapling")
+        for engine in engines:
+            try:
+                if engine == "scrapling":
+                    body, final_url, status = self._render_with_scrapling(url)
+                else:
+                    self._render_url, self._render_status = url, None
+                    body = self._render_with_playwright(url)
+                    final_url, status = self._render_url, self._render_status
+                if status is not None and status >= 400:
+                    audit.append(FetchAttempt(final_url, status, f"{engine}_http_error"))
+                    raise RuntimeError(f"HTTP {status}")
+                if not body.strip() or self._looks_like_block_page(body) or self._looks_like_custom_404(body):
+                    raise RuntimeError("浏览器未取得有效页面，仍为空页、验证页或错误页")
+                audit.append(FetchAttempt(final_url, status, f"{engine}_fallback"))
+                path = self._cache_file(final_url, ".html")
+                path.write_bytes(body)
+                return FetchedResource(final_url, body, "text/html", path, True, audit, status)
+            except Exception as exc:
+                message = str(exc)
+                denied = "ERR_NETWORK_ACCESS_DENIED" in message or "10013" in message
+                audit.append(FetchAttempt(url, None, f"{engine}_failed: {message}"))
+                if denied:
+                    raise FetchError(message, audit, code="network_access_denied") from exc
+        raise FetchError("浏览器回退均未取得有效页面：" + audit[-1].outcome, audit, retriable=True, code="browser_render_failed")
+
+    def listing_cards(self, resource: FetchedResource, selectors=(), date_selectors=(),
+                      containers=(), type_selectors=(), author_selectors=()):
+        def parse(page):
+            return discover_content_cards(page.body, page.url, selectors, date_selectors,
+                                          self.config.content_type_rules, containers,
+                                          type_selectors, author_selectors)
+        cards = parse(resource)
+        if not cards and not resource.rendered:
+            resource = self.render_resource(resource.url, resource.attempts)
+            cards = parse(resource)
+        return resource, cards
 
     def fetch(self, url: str, allow_browser_fallback: bool = True) -> FetchedResource:
         requested_url = normalize_fetch_url(url)
@@ -408,7 +469,11 @@ class WebCrawler:
             body = response.content
         except PermissionError:
             raise
-        except FetchError:
+        except FetchError as exc:
+            if (allow_browser_fallback and exc.code == "http_error"
+                    and any(item.status_code == 403 for item in exc.attempts)
+                    and not urlsplit(attempt_url).path.lower().endswith(".pdf")):
+                return self.render_resource(attempt_url, attempts + exc.attempts, stealth_first=True)
             raise
         except Exception as exc:
             if not attempts or attempts[-1].url != attempt_url or attempts[-1].status_code is not None:
@@ -428,19 +493,7 @@ class WebCrawler:
             blocked = self._looks_like_block_page(body)
             too_empty = len(body) < 2000
             if blocked or too_empty:
-                try:
-                    body = self._render_with_playwright(final_url)
-                    rendered = True
-                    attempts.append(FetchAttempt(final_url, response.status_code if response else None, "playwright_fallback"))
-                except Exception as exc:
-                    message = str(exc)
-                    code = "network_access_denied" if "ERR_NETWORK_ACCESS_DENIED" in message else "browser_render_failed"
-                    raise FetchError(
-                        f"浏览器渲染失败: {message}",
-                        attempts + [FetchAttempt(final_url, None, code)],
-                        retriable=code != "network_access_denied",
-                        code=code,
-                    ) from exc
+                return self.render_resource(final_url, attempts, stealth_first=blocked)
         path = self._cache_file(final_url, suffix)
         path.write_bytes(body)
         return FetchedResource(
@@ -791,16 +844,20 @@ class WebCrawler:
                 content_type_selectors,
                 adapter.listing_content_type_selectors if adapter else (),
             )
-            cards = discover_content_cards(
-                resource.body,
-                resource.url,
-                selectors,
-                date_selectors,
-                self.config.content_type_rules,
-                containers,
-                type_selectors,
-                adapter.listing_author_selectors if adapter else (),
-            )
+            try:
+                resource, cards = self.listing_cards(
+                    resource, selectors, date_selectors, containers, type_selectors,
+                    adapter.listing_author_selectors if adapter else (),
+                )
+            except Exception as exc:
+                result.coverage_status = "incomplete"
+                result.errors.append(str(exc))
+                result.stop_reason = "栏目无卡片且浏览器恢复失败，未确认覆盖完成"
+                break
+            if not cards:
+                result.coverage_status = "incomplete"
+                result.stop_reason = "栏目页未识别到任何候选，未确认覆盖完成"
+                break
             rejected_count = 0
             for card in cards:
                 if not accepted_by_rules(card.fetch_url):
@@ -1068,6 +1125,8 @@ class WebCrawler:
                     if html_document.authors:
                         pdf_document.authors = html_document.authors
                         pdf_document.author_evidence = html_document.author_evidence
+                    pdf_document.content_type_labels = html_document.content_type_labels
+                    pdf_document.content_type_evidence_items = html_document.content_type_evidence_items
                     pdf_document.abstract = html_document.abstract
                     pdf_document.tags = html_document.tags
                     pdf_document.headings = list(
@@ -1075,6 +1134,10 @@ class WebCrawler:
                     )[:30]
                     pdf_document.warnings.extend(html_document.warnings)
                     document = pdf_document
+            required_primary = [item for item in attachments if item.link.role == "primary"]
+            if required_primary and not primary_results and len(document.text) < 6000:
+                document.extraction_status = "partial"
+                document.warnings.append("当前仅有网页摘要，主文档尚未成功提取；不能按摘要篇幅排除研究")
             for item in attachments:
                 if item.error:
                     document.warnings.append(

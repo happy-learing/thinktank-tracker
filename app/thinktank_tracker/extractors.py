@@ -244,6 +244,12 @@ def extract_authors(
     soup: BeautifulSoup,
     preferred_selectors: tuple[str, ...] = (),
 ) -> tuple[list[str], str]:
+    # A visible byline attached to the publication header is more specific than
+    # a CMS account (frequently the institution itself) in generic JSON-LD.
+    for selector in (".post-publication__header .list--authors a", "article > header .byline [rel='author']"):
+        authors = _dedupe_authors(n.get_text(" ", strip=True) for n in soup.select(selector))
+        if authors:
+            return authors, f"文章署名 {selector}: " + "；".join(authors)
     for item in _json_ld_objects(soup):
         raw = item.get("author")
         if raw is None:
@@ -1252,9 +1258,12 @@ def discover_pdf_links(raw: bytes, base_url: str, title: str = "") -> list[Disco
             return
         decoded = unquote(f"{parts.path}?{parts.query}").lower()
         text_value = re.sub(r"\s+", " ", link_text).strip()
-        context = f"{decoded} {text_value}".lower()
+        context = re.sub(r"[_-]+", " ", f"{decoded} {text_value}".lower())
         direct_pdf = ".pdf" in decoded
         download_terms = (
+            "view pdf",
+            "read pdf",
+            "full text",
             "download publication",
             "download the publication",
             "download pdf",

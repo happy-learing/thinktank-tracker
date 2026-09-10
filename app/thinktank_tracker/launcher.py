@@ -53,6 +53,39 @@ def _pdf_parser_self_test() -> bool:
         return False
 
 
+def _browser_parser_self_test() -> bool:
+    """Exercise the packaged Scrapling driver and fingerprint data against loopback only."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from thinktank_tracker.config import AppConfig
+    from thinktank_tracker.crawler import WebCrawler
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.end_headers()
+            self.wfile.write(b"<html><body><article>Portable research test</article></body></html>")
+
+        def log_message(self, *args):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    worker = threading.Thread(target=server.serve_forever, daemon=True)
+    worker.start()
+    crawler = WebCrawler(AppConfig(per_domain_delay_seconds=0))
+    try:
+        body, _, status = crawler._render_with_scrapling(f"http://127.0.0.1:{server.server_port}/")
+        return status == 200 and b"Portable research test" in body
+    except Exception:
+        logger.exception("packaged Scrapling self-test failed")
+        return False
+    finally:
+        crawler.close()
+        server.shutdown()
+        server.server_close()
+        worker.join(timeout=2)
+
+
 def _choose_port(preferred: int | None = None) -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", preferred or 0))
@@ -139,6 +172,8 @@ def main() -> None:
         sys.stdout = open(os.devnull, "w", encoding="utf-8")
     if sys.stderr is None:
         sys.stderr = open(os.devnull, "w", encoding="utf-8")
+    if os.getenv("THINKTANK_BROWSER_SELF_TEST") == "1":
+        raise SystemExit(0 if _browser_parser_self_test() else 1)
     if os.getenv("THINKTANK_PDF_SELF_TEST") == "1":
         raise SystemExit(0 if _pdf_parser_self_test() else 1)
     PATHS.ensure()

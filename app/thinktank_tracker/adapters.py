@@ -81,7 +81,7 @@ ADAPTERS: dict[str, SiteAdapter] = {
         listing_container_selectors=("article.post-publication",),
         listing_content_type_selectors=(".post-publication__thumbnail__tag",),
         listing_author_selectors=(".post-publication__author",),
-        detail_content_type_selectors=(".post-publication__thumbnail__tag", ".publication-category"),
+        detail_content_type_selectors=(".post-publication__header a[href*='/publication_parent/']", ".post-publication__thumbnail__tag", ".publication-category"),
         detail_author_selectors=(".post-publication__author", "[rel='author']", ".author"),
     ),
     "epc": SiteAdapter(
@@ -102,7 +102,7 @@ ADAPTERS: dict[str, SiteAdapter] = {
         ),
         listing_author_selectors=(".publication-author", "[class*='author']"),
         detail_content_type_selectors=(".publication-type", "[class*='publication-type']", ".type"),
-        detail_author_selectors=(".publication-author", "[rel='author']", "[class*='author']"),
+        detail_author_selectors=(".page-authors-author", ".publication-author", "[rel='author']"),
     ),
     "elcano": SiteAdapter(
         "elcano",
@@ -124,7 +124,7 @@ ADAPTERS: dict[str, SiteAdapter] = {
     ),
     "ecfr": SiteAdapter(
         "ecfr",
-        (r"/article/.+", r"/publication/.+"),
+        (r"/article/.+", r"/publication/.+", r"/special/.+"),
         (".entry-list article h2.post-title a.card-main-link[href]",),
         listing_container_selectors=(".entry-list article",),
         listing_content_type_selectors=(".post-meta > li:nth-of-type(2)",),

@@ -200,6 +200,22 @@ def normalize_content_type_rules(
     return normalized
 
 
+def _matching_label_rules(raw: str, rules: dict[str, dict[str, str]]) -> list[dict[str, str]]:
+    """Exact publisher labels win; phrase fallback is confined to the same label."""
+    value = normalize_content_type_label(raw)
+    if value in rules:
+        return [rules[value]]
+    matches = []
+    for phrase, rule in rules.items():
+        if len(phrase) < 2:
+            continue
+        # English words must be whole words: report must not match reportage.
+        pattern = r"(?<![a-z0-9])" + re.escape(phrase) + r"(?![a-z0-9])"
+        if re.search(pattern, value, re.I):
+            matches.append(rule)
+    return matches
+
+
 def collect_content_type_evidence(
     url: str,
     labels: Iterable[str] = (),
@@ -231,18 +247,15 @@ def collect_content_type_evidence(
         raw_labels.append(raw)
     for raw in raw_labels:
         normalized = normalize_content_type_label(raw)
-        rule = label_rules.get(normalized)
-        items.append(
-            ContentTypeEvidence(
-                raw_value=raw,
-                location=label_location,
-                match_kind="card_label",
-                match_value=normalized,
+        matches = _matching_label_rules(raw, label_rules)
+        for rule in matches or [None]:
+            items.append(ContentTypeEvidence(
+                raw_value=raw, location=label_location,
+                match_kind="card_label" if normalized in label_rules else "card_keyword",
+                match_value=rule["match_value"] if rule else normalized,
                 content_type=rule["content_type"] if rule else raw,
-                action=rule["action"] if rule else "review",
-                matched=rule is not None,
-            )
-        )
+                action=rule["action"] if rule else "review", matched=rule is not None,
+            ))
     for raw_segment in urlsplit(url).path.split("/"):
         segment = normalize_url_content_type_keyword(raw_segment)
         if not segment or segment not in url_rules:
@@ -378,7 +391,7 @@ def _label_content_type_match(
         raw_labels.append(raw)
     matches: list[tuple[str, dict[str, str]]] = []
     for raw in raw_labels:
-        if rule := rule_by_label.get(normalize_content_type_label(raw)):
+        for rule in _matching_label_rules(raw, rule_by_label):
             matches.append((raw, rule))
     distinct_types = {rule["content_type"] for _, rule in matches}
     distinct_actions = {rule["action"] for _, rule in matches}

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date
+from typing import Literal
 
 from pydantic import BaseModel, Field, HttpUrl, field_validator, model_validator
 
@@ -53,6 +54,7 @@ class ImportedConfiguration(BaseModel):
 
 
 class AssessmentPayload(BaseModel):
+    research_substance: Literal["substantive", "not_substantive", "uncertain"] = "uncertain"
     decision: Decision
     primary_category: PrimaryCategory | None = None
     secondary_categories: list[PrimaryCategory] = Field(default_factory=list, max_length=8)
@@ -104,6 +106,12 @@ class AssessmentPayload(BaseModel):
         if decision == Decision.INCLUDE and value is None:
             raise ValueError("included assessments require a primary category")
         return value
+
+
+class VerificationPayload(BaseModel):
+    verdict: Literal["supported", "contradicted", "uncertain"]
+    reason: str = Field(min_length=1, max_length=1500)
+    evidence: list[str] = Field(default_factory=list, max_length=3)
 
 
 class DateAssistPayload(BaseModel):

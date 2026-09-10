@@ -95,13 +95,13 @@ class _Crawler:
     ("decision", "confidence", "evidence", "expected_status", "expected_topic"),
     [
         (Decision.INCLUDE, 0.75, "Exact strategic evidence.", CandidateStatus.MODEL_INCLUDED, TopicStatus.MODEL_INCLUDED),
-        (Decision.INCLUDE, 0.749, "Exact strategic evidence.", CandidateStatus.NEEDS_REVIEW, TopicStatus.NEEDS_REVIEW),
+        (Decision.INCLUDE, 0.749, "Exact strategic evidence.", CandidateStatus.MODEL_INCLUDED, TopicStatus.MODEL_INCLUDED),
         (Decision.EXCLUDE, 0.85, "Exact strategic evidence.", CandidateStatus.MODEL_EXCLUDED, TopicStatus.MODEL_EXCLUDED),
-        (Decision.EXCLUDE, 0.849, "Exact strategic evidence.", CandidateStatus.NEEDS_REVIEW, TopicStatus.NEEDS_REVIEW),
+        (Decision.EXCLUDE, 0.849, "Exact strategic evidence.", CandidateStatus.MODEL_EXCLUDED, TopicStatus.MODEL_EXCLUDED),
         (Decision.INCLUDE, 0.99, "exact strategic evidence.", CandidateStatus.NEEDS_REVIEW, TopicStatus.NEEDS_REVIEW),
     ],
 )
-def test_topic_thresholds_and_verbatim_evidence_gate(
+def test_verified_evidence_and_review_replace_self_reported_confidence_thresholds(
     db_session,
     monkeypatch,
     decision,
@@ -115,6 +115,8 @@ def test_topic_thresholds_and_verbatim_evidence_gate(
     captured: list[dict] = []
     payload = AssessmentPayload(
         decision=decision,
+        research_substance="substantive",
+        title_en="Title", title_zh="标题",
         primary_category="macro" if decision == Decision.INCLUDE else None,
         reasoning_zh="判断理由",
         evidence=[evidence],
@@ -132,7 +134,7 @@ def test_topic_thresholds_and_verbatim_evidence_gate(
 
         def assess(self, title, source_name, content_type, text, metadata):
             captured.append(metadata)
-            return ModelResult(payload, '{"decision":"test"}')
+            return ModelResult(payload, '{"decision":"test"}', evidence_text=text, input_complete=True, verification_status="supported")
 
     monkeypatch.setattr(run_service, "OpenAICompatibleProvider", Provider)
     monkeypatch.setattr(run_service, "load_config", AppConfig)
@@ -171,13 +173,19 @@ def test_topic_thresholds_and_verbatim_evidence_gate(
         assert "逐字回查" in candidate.hard_filter_reason
 
 
-def test_unknown_genre_stops_before_model_call(db_session, monkeypatch) -> None:
+def test_unknown_genre_allows_content_analysis_but_stays_pending(db_session, monkeypatch) -> None:
     source, entry, run = _seed(db_session)
     _install_scope(monkeypatch, db_session)
 
     class Provider:
         def __init__(self, _config):
-            raise AssertionError("体裁未确认时不得调用主题模型")
+            self.config = _config
+
+        def configured(self):
+            return True
+
+        def assess(self, *args):
+            return ModelResult(None, error="测试已进入模型判断")
 
     monkeypatch.setattr(run_service, "OpenAICompatibleProvider", Provider)
     run_service._persist_candidate(

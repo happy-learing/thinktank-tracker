@@ -39,6 +39,7 @@ def candidate(**overrides) -> Candidate:
         english_word_count=1600,
         chinese_char_count=0,
         extraction_status="complete",
+        extracted_text="Research evidence. " * 800,
     )
     defaults.update(overrides)
     return Candidate(**defaults)
@@ -52,12 +53,12 @@ def test_hard_filter_includes_both_boundary_dates() -> None:
     assert _hard_filter(candidate(content_type="policy brief"), start, end)[0] == CandidateStatus.DISCOVERED
 
 
-def test_ambiguous_date_requires_review_and_borderline_length_can_reach_model() -> None:
+def test_unknown_date_does_not_block_analysis_and_configured_length_is_a_hard_gate() -> None:
     start, end = date(2026, 8, 2), date(2026, 8, 26)
-    assert _hard_filter(candidate(published_date=None, date_status="conflict"), start, end)[0] == CandidateStatus.NEEDS_REVIEW
+    assert _hard_filter(candidate(published_date=None, date_status="conflict"), start, end)[0] == CandidateStatus.DISCOVERED
     borderline = candidate(english_word_count=1400)
-    assert _hard_filter(borderline, start, end)[0] == CandidateStatus.DISCOVERED
-    assert borderline.length_status == LengthStatus.BORDERLINE
+    assert _hard_filter(borderline, start, end)[0] == CandidateStatus.HARD_EXCLUDED
+    assert borderline.length_status == LengthStatus.BELOW
 
 
 def test_detail_and_listing_date_conflict_is_not_silently_resolved() -> None:

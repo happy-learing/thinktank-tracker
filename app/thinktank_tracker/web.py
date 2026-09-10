@@ -80,6 +80,9 @@ from .models import (
     utcnow,
 )
 from .paths import PATHS
+from .exporters import export_draft_report, draft_issues
+from .selection import run_policy
+from .run_service import assess_stored_candidate
 from .review_service import save_review
 from .run_service import (
     create_run,
@@ -1063,6 +1066,10 @@ def run_detail(request: Request, run_id: int, content_filter: str = "all"):
             )
 
         def matches(item: Candidate) -> bool:
+            if content_filter == "draft_ready":
+                return item.status == CandidateStatus.MODEL_INCLUDED and not draft_issues(item, run)
+            if content_filter == "exceptions":
+                return item.status in {CandidateStatus.NEEDS_REVIEW, CandidateStatus.DISCOVERED}
             if content_filter == "all":
                 return True
             if content_filter == "hard_eligible":
@@ -1675,10 +1682,23 @@ def review_candidate(
     return _redirect(f"/runs/{run_id}", "人工审核已保存")
 
 
+@app.post("/candidates/{candidate_id}/reanalyze")
+def reanalyze_candidate(candidate_id: int):
+    assess_stored_candidate(candidate_id)
+    return _redirect(f"/candidates/{candidate_id}", "已按任务规则重新分析已保存正文")
+
+
 @app.post("/runs/{run_id}/export/report")
 def report_export(run_id: int):
     with SessionLocal() as session:
         path = export_report(session, run_id)
+    return FileResponse(path, filename=path.name)
+
+
+@app.post("/runs/{run_id}/export/draft")
+def draft_export(run_id: int):
+    with SessionLocal() as session:
+        path = export_draft_report(session, run_id)
     return FileResponse(path, filename=path.name)
 
 
@@ -1875,6 +1895,10 @@ def update_settings(
     api_key: Annotated[str, Form()] = "",
     request_timeout_seconds: Annotated[int, Form()] = 120,
     max_model_input_chars: Annotated[int, Form()] = 20000,
+    selection_mode: Annotated[str, Form()] = "strict",
+    min_english_words: Annotated[int, Form()] = 1500,
+    min_chinese_chars: Annotated[int, Form()] = 3000,
+    max_model_chunks: Annotated[int, Form()] = 12,
     crawl_concurrency: Annotated[int, Form()] = 3,
     per_domain_delay_seconds: Annotated[float, Form()] = 2.0,
     max_listing_pages: Annotated[int, Form()] = 25,
@@ -1916,6 +1940,10 @@ def update_settings(
         api_style=resolved_api_style,
         request_timeout_seconds=max(10, min(request_timeout_seconds, 600)),
         max_model_input_chars=max(5000, min(max_model_input_chars, 200000)),
+        selection_mode=selection_mode if selection_mode in {"strict", "substance"} else "strict",
+        min_english_words=max(0, min(min_english_words, 100000)),
+        min_chinese_chars=max(0, min(min_chinese_chars, 200000)),
+        max_model_chunks=max(1, min(max_model_chunks, 30)),
         crawl_concurrency=max(1, min(crawl_concurrency, 3)),
         per_domain_delay_seconds=max(2.0, per_domain_delay_seconds),
         max_listing_pages=max(1, min(max_listing_pages, 200)),

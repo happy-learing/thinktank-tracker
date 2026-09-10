@@ -30,7 +30,7 @@ hiddenimports = collect_submodules("keyring.backends") + [
 ]
 binaries = []
 
-for package in ("playwright", "certifi", "anydoc"):
+for package in ("playwright", "certifi", "anydoc", "scrapling", "patchright", "browserforge", "apify_fingerprint_datapoints", "curl_cffi", "tld"):
     package_datas, package_binaries, package_hidden = collect_all(package)
     datas += package_datas
     binaries += package_binaries
@@ -40,6 +40,7 @@ if Path(anydoc_native).name.lower() != "_anydoc.pyd":
     raise RuntimeError(f"Unexpected AnyDoc native module: {anydoc_native}")
 binaries.append((anydoc_native, "anydoc"))
 datas += copy_metadata("firecrawl-anydoc")
+datas += copy_metadata("scrapling")
 
 a = Analysis(
     [str(source_root / "thinktank_tracker" / "launcher.py")],

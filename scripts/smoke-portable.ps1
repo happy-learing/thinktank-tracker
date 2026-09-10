@@ -21,6 +21,21 @@ try {
 } finally {
     $env:THINKTANK_PDF_SELF_TEST = $PreviousPdfSelfTest
 }
+$PreviousBrowserSelfTest = $env:THINKTANK_BROWSER_SELF_TEST
+try {
+    $env:THINKTANK_BROWSER_SELF_TEST = "1"
+    $BrowserSelfTest = Start-Process -FilePath $Executable -WorkingDirectory $ResolvedRoot -WindowStyle Hidden -PassThru
+    if (-not $BrowserSelfTest.WaitForExit(60000)) {
+        Stop-Process -Id $BrowserSelfTest.Id -Force
+        throw "Portable Scrapling loopback self-test exceeded 60 seconds."
+    }
+    if ($BrowserSelfTest.ExitCode -ne 0) {
+        throw "Portable Scrapling driver and fingerprint data self-test failed with code $($BrowserSelfTest.ExitCode)."
+    }
+    Write-Host "Portable Scrapling loopback browser self-test passed."
+} finally {
+    $env:THINKTANK_BROWSER_SELF_TEST = $PreviousBrowserSelfTest
+}
 $Previous = $env:THINKTANK_NO_BROWSER
 $PreviousPort = $env:THINKTANK_PORT
 $Listener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
